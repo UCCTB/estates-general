@@ -8,8 +8,9 @@
 
 | 文档 | 用途 |
 |---|---|
-| `技术设计文档 › TDD-001：三级会议 裁判引擎` | **实施规格。字段命名、枚举、结算顺序、状态机以它为准。** URL: https://wiki.un-canon.com/doc/tdd-001-WySllJgZi7 |
-| `docs/rulebook-v1.md`（本仓库） | 规则书 V1.0。所有数值（身份卡、项目卡、加成、风险、危机表）的来源。引擎不改数值。 |
+| `技术设计文档 › TDD-001：三级会议 裁判引擎` | **实施规格。字段命名、枚举、结算顺序、状态机以它为准。** 现为 v0.2。URL: https://wiki.un-canon.com/doc/tdd-001-WySllJgZi7 |
+| `技术设计文档 › TDD-002：终局叙事与成就查询` | 阶段 4 的实施规格：三层结局查表、自动档判定表达式、提名档候选查询、终局投票。现为 v0.1。URL: https://wiki.un-canon.com/doc/tdd-002-42z8puZR6T |
+| `docs/rulebook-v1.md`（本仓库） | 规则书 V1.0.1。所有数值（身份卡、项目卡、加成、风险、危机表）与成就 / 结局文字的来源。引擎不改数值。 |
 
 开工前：用 Outline MCP 拉取 TDD-001 全文读一遍。本仓库不镜像 TDD（避免双源）；如需离线副本，放 `docs/tdd-001-snapshot.md` 并在文件头注明快照日期，冲突时以 Outline 为准。
 
@@ -29,15 +30,24 @@ TDD-001 与规则书冲突时，以 TDD-001 为准（差异清单见 TDD-001 附
 - TypeScript（strict），Node ≥ 20，pnpm workspace
 - 测试：vitest；性质测试用 fast-check
 - 包布局：
-  - `packages/engine` — 领域模型、校验、结算、契约、RNG、事件、成就查询
+  - `packages/engine` — 领域模型、校验、结算、契约、RNG、事件、成就查询、终局结局
   - `packages/sim` — 纯文本模拟器：12 个脚本化策略跑 6 回合，输出规则书 §26 观察指标。只依赖 engine。
-  - `packages/server` / `packages/client` — 阶段 3 再建，现在不要建。
+  - `packages/server` — Game Server（node:http + SSE，零运行时依赖）+ 座位令牌 + 玩家端 / 主持端。
+    玩家端不是独立包：`packages/server/public/` 下的三个静态 HTML，无构建步骤，改完刷新即可。
+- 命令：`pnpm test` / `pnpm typecheck` / `pnpm sim --seed demo` / `pnpm serve`（默认 :8787）
 
 ## 工作顺序（对应 TDD-001 §14）
 
-阶段 1 → 阶段 2 → 阶段 4 的自动档成就 → 阶段 3。**先让模拟器跑通 6 回合，再做任何网络或 UI。**
+| 阶段 | 内容 | Done 标准 | 状态 |
+|---|---|---|---|
+| 1 | 引擎核心（模型 / 校验 / settle / roundStart / RNG / 事件） | `pnpm sim` 固定 seed 跑完一局并打印观察指标；性质测试通过；同 seed 重跑逐字节相同 | ✅ 2026-08-27 |
+| 2 | 契约引擎（公证 / 备忘 / 失信 / 情报转述） | 失信路径全覆盖；模拟器里「高杠杆」策略产生可观测的失信记录 | ✅ 2026-08-27 |
+| 4 | 成就自动档 + 提名档 + 终局三层结局 | 每条成就一个正例 + 一个「刚好不满足」的反例；`pnpm sim` 输出结局与成就 | ✅ 2026-08-27 |
+| 3 | Game Server + 座位令牌 + 最小玩家端 | 12 个浏览器 tab 可完整跑一局 | ✅ 2026-08-27（`packages/server/test/fullgame.test.ts` 用 12 个 HTTP 客户端跑通全程） |
 
-阶段 1 的 Done 标准：`pnpm sim` 能在固定 seed 下跑完一局并打印观察指标；资金守恒等性质测试通过；同 seed 重跑输出逐字节相同。
+下一步是 TDD-001 §14 阶段 4 的后半段：**≥ 3 局真人试玩**，回答规则书 §27 的检验问题 1–9。
+试玩之前不要再加机制——阈值（`data/achievement-meta.ts` 的 `THRESHOLDS`）和 §4.3 的结局回退
+都等着真实数据来定。
 
 ## 代码约定
 

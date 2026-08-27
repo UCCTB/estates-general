@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>《三级会议》裁判引擎</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>《三级会议》裁判引擎</h1>
+  <p class="muted">固定 12 人 / 6 回合。这里只做裁判：结算、契约、履历、终局。谈判用你们自己的语音或文字房间。</p>
+
+  <div class="card">
+    <h2>建局</h2>
+    <div class="row">
+      <label>随机种子（留空自动生成）</label>
+      <input type="text" id="seed" placeholder="例如 2026-08-27-first">
+      <button class="primary" id="go">建局并签发 12 个座位令牌</button>
+    </div>
+    <p class="muted" style="font-size:13px">
+      种子决定发牌与全部掷骰。开局公开它的哈希承诺，终局公开种子本身——每一次抽签事后都可复核。
+    </p>
+  </div>
+
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+$('go').onclick = async () => {
+  $('go').disabled = true;
+  const r = await fetch('/api/create', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ seed: $('seed').value.trim() }),
+  }).then((x) => x.json());
+  $('go').disabled = false;
+  if (!r.ok) { $('out').innerHTML = '<div class="card err">' + r.reason + '</div>'; return; }
+
+  const rows = r.links.map((l) => {
+    const url = location.origin + l.url;
+    return '<tr><td>座位 ' + l.seatId + '</td><td>' + l.identity
+      + '</td><td class="linkbox"><a href="' + url + '" target="_blank">' + url + '</a></td></tr>';
+  }).join('');
+
+  $('out').innerHTML =
+    '<div class="card"><h2>已建局：' + r.gameId + '</h2>'
+    + '<p>种子哈希承诺 <span class="mono">' + r.seedCommitment + '</span></p>'
+    + '<p><a class="pill" href="' + r.hostUrl + '" target="_blank">打开主持端 →</a>'
+    + ' <span class="muted">牵头玩家自己占座位 1，其余 11 条链接私发出去。链接 6 小时后失效。</span></p>'
+    + '<table><tr><th>座位</th><th>身份</th><th>magic link（一人一条，不要发到公共频道）</th></tr>'
+    + rows + '</table></div>';
+};
+</script>
+</body>
+</html>

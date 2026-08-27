@@ -4,3 +4,7 @@ coverage/
 .env
 *.log
 .DS_Store
+
+# Game Server 的房间存档（每局一份，含种子——不入库）
+data/
+data-*/

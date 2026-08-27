@@ -1,0 +1,50 @@
+:root {
+  --ink: #1b1a17;
+  --paper: #f6f3ec;
+  --line: #cfc7b6;
+  --muted: #6f6858;
+  --accent: #7a2e1d;
+  --ok: #2f5d3a;
+  --warn: #8a6a10;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px;
+  font: 15px/1.6 "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+  color: var(--ink); background: var(--paper);
+}
+h1, h2, h3 { font-weight: 600; margin: 0 0 8px; }
+h1 { font-size: 20px; }
+h2 { font-size: 17px; border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 20px; }
+h3 { font-size: 15px; color: var(--muted); margin-top: 12px; }
+a { color: var(--accent); }
+.wrap { max-width: 1100px; margin: 0 auto; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+.card { border: 1px solid var(--line); background: #fffdf8; padding: 10px 12px; margin-bottom: 10px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+label { font-size: 13px; color: var(--muted); }
+input, select, textarea, button {
+  font: inherit; color: inherit; background: #fff;
+  border: 1px solid var(--line); padding: 4px 8px;
+}
+input[type=number] { width: 84px; }
+input[type=text] { width: 160px; }
+button { cursor: pointer; background: #efe9dc; }
+button:hover { background: #e5dcc9; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.primary:hover { filter: brightness(1.12); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { border-bottom: 1px solid var(--line); padding: 3px 6px; text-align: left; }
+th { color: var(--muted); font-weight: 500; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.log { max-height: 320px; overflow: auto; font-size: 12.5px; }
+.log div { padding: 1px 0; border-bottom: 1px dotted #e2dccd; }
+.muted { color: var(--muted); }
+.pill { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 9px; font-size: 12px; }
+.err { color: var(--accent); }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.stat b { font-size: 17px; }
+.stat span { color: var(--muted); font-size: 12px; margin-right: 10px; }
+.linkbox { font-size: 12px; word-break: break-all; }

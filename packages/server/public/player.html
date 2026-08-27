@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>《三级会议》玩家端</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="head"></div>
+  <div class="grid">
+    <div>
+      <div class="card" id="cards"></div>
+      <div class="card" id="act"></div>
+    </div>
+    <div>
+      <div class="card" id="seats"></div>
+      <div class="card" id="contracts"></div>
+      <div class="card"><h2>日志（只显示你看得到的）</h2><div class="log" id="log"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN = decodeURIComponent(location.pathname.replace(/^\/join\//, ''));
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const ID_ZH = { KING:'国王', QUEEN:'王后', BISHOP:'主教', KNIGHT:'骑士', NOBLE:'贵族', CLERK:'书记官',
+  MERCHANT:'商人', GUILD_MASTER:'行会师傅', SCHOLAR:'学者', BURGHER:'市民', ARTISAN:'工匠', PEASANT:'农民' };
+const Q_ZH = { NONE:'无', BASIC:'基础', ENGINEERING:'工程', ADMIN:'行政', ORG:'组织', CORE:'核心' };
+const D_ZH = { WAR:'王权与战争', ENGINEERING:'工程与生产', COMMERCE:'商业与运输', ADMIN:'知识与行政', CRISIS:'教会与公共危机' };
+const PHASE_ZH = { ROUND_START:'回合开始', REVEAL_AND_INTEL:'项目公布与情报', NEGOTIATION:'自由磋商',
+  SUBMISSION:'秘密提交', SETTLEMENT:'统一结算', GAME_END:'终局' };
+const AUDIT_ZH = { RECORD_FIRST:'履历优先', QUALIFICATION_FIRST:'资格优先', PRACTICE_FIRST:'实务优先' };
+
+let S = null, META = null, ME = null, msg = '';
+
+async function pull() {
+  const r = await fetch('/api/state?t=' + encodeURIComponent(TOKEN)).then((x) => x.json());
+  if (!r.ok) { document.body.innerHTML = '<div class="wrap"><div class="card err">' + esc(r.reason) + '</div></div>'; return; }
+  S = r.snapshot; META = r.meta; ME = r.seatId;
+  render();
+}
+
+async function act(action, extra) {
+  const r = await fetch('/api/act?t=' + encodeURIComponent(TOKEN), {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(Object.assign({ action }, extra || {})),
+  }).then((x) => x.json());
+  msg = r.ok ? '<span class="ok">已提交</span>' + (r.field ? '：揭示 ' + r.field + ' = ' + r.value : '')
+             : '<span class="err">' + esc(r.reason) + '</span>';
+  await pull();
+  return r;
+}
+
+function seatLabel(k) {
+  const s = S.seats.find((x) => x.seatId === k);
+  return k + ' ' + (s ? ID_ZH[s.identity] : '');
+}
+
+function seatOptions(exclude) {
+  return S.seats.filter((s) => s.seatId !== exclude)
+    .map((s) => '<option value="' + s.seatId + '">' + seatLabel(s.seatId) + '</option>').join('');
+}
+
+function qualOptions() {
+  const held = (S.you.qualifications || []).filter((q) => !q.usedThisRound);
+  return '<option value="">不使用资格</option>'
+    + held.map((q) => '<option value="' + q.kind + '">' + Q_ZH[q.kind] + '</option>').join('');
+}
+
+// ── 头部 ──
+function renderHead() {
+  const y = S.you;
+  const deadline = META.deadline ? Math.max(0, Math.round((META.deadline - Date.now()) / 1000)) : null;
+  $('head').innerHTML =
+    '<h1>座位 ' + ME + '｜' + ID_ZH[y.identity] + '</h1>'
+    + '<div class="stat"><span>回合</span><b>' + S.round + '/6</b> '
+    + '<span>阶段</span><b>' + PHASE_ZH[S.phase] + '</b> '
+    + (deadline !== null ? '<span>剩余</span><b>' + deadline + ' 秒</b> ' : '')
+    + '<span>可用资金</span><b>' + y.funds + '</b> '
+    + '<span>锁定</span><b>' + y.lockedFunds + '</b> '
+    + '<span>能力</span><b>' + (y.abilityBase - y.abilityCommitted) + '/' + y.abilityBase + '</b> '
+    + '<span>情报权</span><b>' + y.intel + '</b></div>'
+    + '<div class="row muted" style="font-size:13px">资格：'
+    + (y.qualifications.length ? y.qualifications.map((q) => Q_ZH[q.kind] + (q.usedThisRound ? '（本回合已用）' : '')).join('、') : '无')
+    + '｜印章 ' + y.stamps.length + '｜项目记录 ' + y.records.length + '｜失信 ' + y.defaults.length
+    + (S.pendingPayouts.length ? '｜在途收益 ' + S.pendingPayouts.reduce((a, p) => a + p.amount, 0) : '')
+    + '</div>'
+    + (msg ? '<div class="row">' + msg + '</div>' : '');
+}
+
+// ── 本回合项目卡 ──
+function renderCards() {
+  const c = S.cards;
+  const f = (d) => {
+    const x = c[d]; if (!x) return '';
+    const bits = [];
+    if (x.teamSize) bits.push('人数 ' + x.teamSize[0] + '–' + x.teamSize[1]);
+    bits.push('准入 ' + entryZh(x.entry));
+    if (x.minFunds != null) bits.push('资金 ≥ ' + x.minFunds);
+    if (x.minAbility != null) bits.push('能力 ≥ ' + x.minAbility);
+    if (x.budgetCap != null) bits.push('预算上限 ' + x.budgetCap + '（最低报价 ' + Math.ceil(x.budgetCap * 0.5) + '）');
+    if (x.reward != null) bits.push('收益 ' + x.reward);
+    if (x.risk != null) bits.push('风险 ' + x.risk);
+    if (x.slots != null) bits.push('名额 ' + x.slots);
+    if (x.rewardIntel != null) bits.push('+' + x.rewardIntel + ' 情报权');
+    if (x.fundsTarget != null) bits.push('资金目标 ' + x.fundsTarget);
+    if (x.abilityTarget != null) bits.push('能力目标 ' + x.abilityTarget);
+    if (x.failPenalty != null) bits.push('失败全员 −' + x.failPenalty);
+    return '<tr><td>' + D_ZH[d] + '</td><td><b>' + x.name + '</b></td><td class="muted">' + bits.join('｜') + '</td></tr>';
+  };
+  $('cards').innerHTML = '<h2>第 ' + S.round + ' 回合项目</h2><table>'
+    + ['WAR', 'ENGINEERING', 'COMMERCE', 'ADMIN', 'CRISIS'].map(f).join('') + '</table>'
+    + '<p class="muted" style="font-size:13px">行政审查令：'
+    + (S.auditOrder ? AUDIT_ZH[S.auditOrder] : '申请时隐藏，结算时公开')
+    + (S.pledges.length ? '｜本回合已登记承诺 ' + S.pledges.length + ' 席，合计 '
+        + S.pledges.reduce((a, p) => a + p.funds, 0) + ' 资金 / '
+        + S.pledges.reduce((a, p) => a + p.ability, 0) + ' 能力' : '')
+    + '</p>';
+}
+
+function entryZh(e) {
+  if (!e) return '无';
+  if (e.kind === 'NONE') return '无';
+  if (e.kind === 'AT_LEAST_BASIC') return '基础以上';
+  if (e.kind === 'ANY_OF') return e.accepted.map((q) => Q_ZH[q]).join(' / ');
+  return '核心，或 2 项组织资格';
+}
+
+// ── 其他座位 ──
+function renderSeats() {
+  $('seats').innerHTML = '<h2>十二席</h2><table>'
+    + '<tr><th>座位</th><th>身份</th><th>持有</th><th>能力</th><th>资格</th><th>印章</th><th>记录</th><th>失信</th><th>在线</th></tr>'
+    + S.seats.map((s) => '<tr' + (s.seatId === ME ? ' style="font-weight:600"' : '') + '>'
+      + '<td>' + s.seatId + '</td><td>' + ID_ZH[s.identity] + '</td><td>' + s.holdings + '</td>'
+      + '<td>' + s.abilityBase + '</td>'
+      + '<td>' + (s.qualifications.length ? s.qualifications.map((q) => Q_ZH[q.kind]).join('、') : '—') + '</td>'
+      + '<td>' + s.stamps + '</td><td>' + s.records + '</td>'
+      + '<td' + (s.defaults.length ? ' class="err"' : '') + '>' + s.defaults.length + '</td>'
+      + '<td>' + (s.connected ? '●' : '○') + '</td></tr>').join('')
+    + '</table><p class="muted" style="font-size:12px">「持有」= 可用 + 锁定，不拆分——拆开就等于提前泄漏别人本回合的提交额。</p>';
+}
+
+// ── 契约 ──
+function renderContracts() {
+  const mine = S.contracts;
+  const rows = mine.map((c) => {
+    const t = c.terms;
+    let detail = '<span class="muted">条款不可见</span>';
+    if (t && t.tier === 'NOTARIZED') {
+      detail = triggerZh(t.trigger) + ' → 座位 ' + t.payer + ' 付 座位 ' + t.payee + ' ' + t.amount
+        + (t.escrowed ? '（托管）' : '') + '，失效回合 ' + t.expiresRound;
+    } else if (t && t.tier === 'MEMO') {
+      detail = (t.kind === 'INTEL_RELAY' ? '【情报转述】' : '') + esc(t.summary)
+        + (t.accusations && t.accusations.length ? '｜指控 ' + t.accusations.length + ' 次' : '');
+    }
+    const canAct = t && t.parties.includes(ME);
+    let btns = '';
+    if (canAct && t.tier === 'NOTARIZED' && t.status === 'ACTIVE' && S.phase === 'NEGOTIATION') {
+      btns = '<button onclick="act(\'cancel\',{contractId:\'' + c.contractId + '\'})">提议取消</button>';
+    }
+    if (canAct && t.tier === 'MEMO' && S.phase === 'NEGOTIATION') {
+      btns = '<button onclick="accuse(\'' + c.contractId + '\')">指控</button>'
+        + ' <button onclick="rebut(\'' + c.contractId + '\')">反驳</button>';
+    }
+    return '<tr><td>' + c.contractId + '</td><td>' + (c.tier === 'NOTARIZED' ? '公证' : '备忘') + '</td>'
+      + '<td>' + c.parties.map(seatLabel).join(' ↔ ') + '</td>'
+      + '<td>' + statusZh(c.status) + '</td><td>' + detail + '</td><td>' + btns + '</td></tr>';
+  }).join('');
+  $('contracts').innerHTML = '<h2>契约（' + mine.length + '）</h2>'
+    + (mine.length ? '<table><tr><th>号</th><th>层</th><th>当事人</th><th>状态</th><th>条款</th><th></th></tr>' + rows + '</table>'
+      : '<p class="muted">还没有任何契约。</p>');
+}
+
+function statusZh(s) {
+  return ({ ACTIVE:'生效中', FULFILLED:'已履行', DEFAULTED:'失信', PARTIAL_DEFAULT:'部分失信',
+    VOID:'作废', CANCELLED:'已取消', OPEN:'记录中', DISPUTED:'有争议' })[s] || s;
+}
+
+function triggerZh(t) {
+  if (!t) return '';
+  if (t.kind === 'PROJECT_RESULT') return '第' + t.round + '回合' + D_ZH[t.domain] + '结果为' + ({ SUCCESS:'成功', FAIL:'失败', NO_AWARD:'流标' })[t.result];
+  if (t.kind === 'PLAYER_AWARDED') return '第' + t.round + '回合座位' + t.seat + (t.awarded ? '在' : '未在') + D_ZH[t.domain] + '中标';
+  if (t.kind === 'CRISIS_RESULT') return '第' + t.round + '回合危机' + (t.result === 'SUCCESS' ? '成功' : '失败');
+  if (t.kind === 'CRISIS_CONTRIBUTION') return '第' + t.round + '回合座位' + t.seat + '对危机的' + (t.resource === 'FUNDS' ? '资金' : '能力') + '贡献 ≥ ' + t.atLeast;
+  if (t.kind === 'ROUND_START') return '第' + t.round + '回合开始时';
+  return '座位' + t.seat + '在第' + t.byRound + '回合前取得' + Q_ZH[t.kind_] + '资格';
+}
+
+// ── 日志 ──
+function renderLog() {
+  const lines = S.events.slice().reverse().slice(0, 200).map((e) => {
+    const p = e.payload;
+    const head = '<span class="muted mono">R' + e.round + ' ' + e.type + '</span> ';
+    let body = '';
+    switch (e.type) {
+      case 'PROJECT_RESOLVED':
+        if (p.detail) return '';
+        body = D_ZH[p.domain] + '《' + p.card + '》' + ({ SUCCESS:'成功', FAIL:'失败', NO_AWARD:'流标' })[p.result]
+          + (p.winnerMembers && p.winnerMembers.length ? '｜中标 ' + p.winnerMembers.join('、') : '')
+          + (p.selected ? '｜录取 ' + (p.selected.join('、') || '无') : '')
+          + (p.auditOrder ? '｜' + AUDIT_ZH[p.auditOrder] : '')
+          + (p.dice ? '｜骰 ' + p.dice + '（R\'=' + p.effectiveRisk + '）' : '');
+        break;
+      case 'CRISIS_RESOLVED':
+        body = '危机《' + p.card + '》' + (p.result === 'SUCCESS' ? '成功' : '失败')
+          + '｜资金 ' + p.totalFunds + '/' + p.fundsTarget + '，能力 ' + p.totalAbility + '/' + p.abilityTarget;
+        break;
+      case 'TRANSFER': body = '座位 ' + p.from + ' → 座位 ' + p.to + ' 转账 ' + p.amount; break;
+      case 'CONTRACT_FULFILLED': body = p.contractId + ' 履约：座位 ' + p.payer + ' 付 座位 ' + p.payee + ' ' + p.amount; break;
+      case 'CONTRACT_DEFAULTED': body = '<span class="err">' + p.contractId + ' 失信：座位 ' + p.payer + ' 欠 座位 ' + p.payee + ' ' + p.owed + '，只付 ' + p.paid + '</span>'; break;
+      case 'CONTRACT_VOID': body = p.contractId + ' 作废（' + p.reason + '）'; break;
+      case 'CONTRACT_REGISTERED': body = p.contractId + ' 登记：' + (p.parties || []).join(' ↔ '); break;
+      case 'MEMO_REGISTERED': body = p.contractId + ' 备忘登记：' + (p.parties || []).join(' ↔ '); break;
+      case 'MEMO_ACCUSED': body = '<span class="warn">座位 ' + p.by + ' 指控 ' + p.contractId + '：' + esc(p.statement) + '</span>'; break;
+      case 'MEMO_REBUTTED': body = '座位 ' + p.by + ' 反驳：' + esc(p.statement); break;
+      case 'CRISIS_PLEDGED': body = '座位 ' + p.seatId + ' 承诺危机 ' + p.funds + ' 资金 / ' + p.ability + ' 能力'; break;
+      case 'INTEL_USED': body = '座位 ' + p.seatId + ' 使用情报权，指向第 ' + p.target.round + ' 回合 ' + D_ZH[p.target.domain]; break;
+      case 'INTEL_REVEALED': body = '<span class="ok">情报揭示：' + p.field + ' = ' + esc(p.value) + '</span>'; break;
+      case 'INTEL_CLAIM_VERIFIED': body = '情报核验 ' + p.contractId + '：声称 ' + esc(p.claimedValue) + '，真值 ' + esc(p.actualValue) + ' → ' + (p.truthful ? '属实' : '<span class="err">谣言</span>'); break;
+      case 'PAYOUT': body = '座位 ' + p.seatId + ' 入账 ' + p.amount + '（' + (p.kind === 'REFUND' ? '返还' : '收益') + '，' + (D_ZH[p.source] || p.source) + '）'; break;
+      case 'PENALTY': body = '座位 ' + p.seatId + ' 危机处罚 −' + p.amount; break;
+      case 'RECORD_GRANTED': body = '座位 ' + p.seatId + ' 取得 ' + D_ZH[p.domain] + ' 项目记录'; break;
+      case 'STAMP_GRANTED': body = '座位 ' + p.seatId + ' 取得履历印章'; break;
+      case 'QUALIFICATION_QUEUED': body = '座位 ' + p.seatId + ' 的 ' + Q_ZH[p.kind] + ' 资格排队（下回合生效）'; break;
+      case 'QUALIFICATION_APPLIED': body = '<span class="ok">座位 ' + p.seatId + ' 取得 ' + Q_ZH[p.kind] + ' 资格</span>'; break;
+      case 'ACHIEVEMENT_AUTO': body = '<span class="ok">【' + p.name + '】' + esc(p.evidence.note) + '</span>'; break;
+      case 'ACHIEVEMENT_NOMINATED': body = '<span class="ok">【' + p.name + '】经全员投票确认</span>'; break;
+      case 'SUBMISSION_LOCKED': body = '座位 ' + p.seatId + ' 已提交'; break;
+      case 'SEAT_CONNECTED': body = '座位 ' + p.seatId + ' 已就座'; break;
+      case 'CONVERSATION_OPENED': body = '谈话开始：' + (p.participants || []).join('、'); break;
+      case 'CONVERSATION_CLOSED': body = '谈话结束：' + (p.participants || []).join('、'); break;
+      case 'GAME_END': body = '<b>第 6 回合结算完毕，种子公开：' + esc(p.seed) + '</b>'; break;
+      default: body = '<span class="muted">' + esc(JSON.stringify(p)).slice(0, 160) + '</span>';
+    }
+    return '<div>' + head + body + '</div>';
+  }).join('');
+  $('log').innerHTML = lines || '<p class="muted">还没有事件。</p>';
+}
+
+// ── 阶段面板 ──
+function renderAct() {
+  const p = S.phase;
+  let h = '<h2>你可以做的</h2>';
+
+  if (p === 'ROUND_START') h += '<p class="muted">等主持端开始本回合。</p>';
+
+  if (p === 'REVEAL_AND_INTEL') {
+    h += '<h3>情报权（本阶段用完即关，谈判开始后不能再用）</h3><div class="row">'
+      + '<select id="intelDomain">' + ['WAR','ENGINEERING','COMMERCE','ADMIN','CRISIS'].map((d) => '<option value="' + d + '">' + D_ZH[d] + '</option>').join('') + '</select>'
+      + '<button onclick="act(\'intel\',{domain:$(\'intelDomain\').value})">侦知下一回合（消耗 1 次）</button>'
+      + '</div>';
+    h += transferBox();
+  }
+
+  if (p === 'NEGOTIATION') {
+    h += transferBox();
+    h += conversationBox();
+    h += pledgeBox();
+    h += proposalBox();
+    h += inboxBox();
+  }
+
+  if (p === 'SUBMISSION') {
+    h += META.submitted.includes(ME)
+      ? '<p class="ok">本回合已提交，提交后不得修改。</p>'
+      : submitForm();
+  }
+
+  if (p === 'SETTLEMENT') h += '<p class="muted">结算进行中。</p>';
+
+  if (p === 'GAME_END') h += endingBox();
+
+  $('act').innerHTML = h;
+}
+
+function transferBox() {
+  return '<h3>转账（即时、无条件、无手续费）</h3><div class="row">'
+    + '<select id="tTo">' + seatOptions(ME) + '</select>'
+    + '<input type="number" id="tAmt" min="1" value="10">'
+    + '<button onclick="act(\'transfer\',{to:+$(\'tTo\').value,amount:+$(\'tAmt\').value})">转出</button>'
+    + '</div>';
+}
+
+function conversationBox() {
+  const open = META.conversations.filter((c) => c.participants.includes(ME));
+  return '<h3>谈话（决定契约的见证人）</h3><div class="row">'
+    + '<select id="cWith" multiple size="4" style="height:auto">' + seatOptions(ME) + '</select>'
+    + '<button onclick="openConv()">开始谈话</button></div>'
+    + (open.length ? '<div class="row muted">进行中：' + open.map((c) =>
+        c.participants.join('、') + ' <button onclick="act(\'closeConversation\',{id:\'' + c.id + '\'})">结束</button>').join('｜') + '</div>' : '');
+}
+
+function pledgeBox() {
+  const mine = S.pledges.find((x) => x.seatId === ME);
+  return '<h3>公共危机承诺（公开，不强制执行）</h3><div class="row">'
+    + '<label>资金</label><input type="number" id="plF" min="0" value="' + (mine ? mine.funds : 0) + '">'
+    + '<label>能力</label><input type="number" id="plA" min="0" value="' + (mine ? mine.ability : 0) + '">'
+    + '<button onclick="act(\'pledge\',{funds:+$(\'plF\').value,ability:+$(\'plA\').value})">登记承诺</button>'
+    + '</div><p class="muted" style="font-size:12px">承诺不扣钱、不锁定。兑不兑现是你和别人之间的事——但它会被记下来。</p>';
+}
+
+function proposalBox() {
+  const rounds = [1,2,3,4,5,6].map((r) => '<option value="' + r + '">第 ' + r + ' 回合</option>').join('');
+  return '<h3>登记契约（对方确认后才生效）</h3>'
+    + '<div class="row"><select id="pTier"><option value="NOTARIZED">公证契约（登记费 5，引擎强制执行）</option>'
+    + '<option value="MEMO">备忘契约（免费，只记录）</option></select>'
+    + '<label>对方</label><select id="pTo">' + seatOptions(ME) + '</select></div>'
+    + '<div id="pNot"><div class="row">'
+    + '<label>触发</label><select id="pTrig">'
+    + '<option value="PROJECT_RESULT">项目结果</option><option value="PLAYER_AWARDED">某人中标</option>'
+    + '<option value="CRISIS_RESULT">危机结果</option><option value="CRISIS_CONTRIBUTION">危机贡献</option>'
+    + '<option value="ROUND_START">回合开始</option><option value="QUALIFICATION_GAINED">取得资格</option></select>'
+    + '<select id="pRound">' + rounds + '</select>'
+    + '<select id="pDomain">' + ['WAR','ENGINEERING','COMMERCE','ADMIN'].map((d) => '<option value="' + d + '">' + D_ZH[d] + '</option>').join('') + '</select>'
+    + '<select id="pResult"><option value="SUCCESS">成功</option><option value="FAIL">失败</option><option value="NO_AWARD">流标</option></select>'
+    + '</div><div class="row">'
+    + '<label>付款方</label><select id="pPayer"><option value="' + ME + '">我</option><option value="other">对方</option></select>'
+    + '<label>金额</label><input type="number" id="pAmt" min="1" max="200" value="20">'
+    + '<label>失效回合</label><select id="pExp">' + rounds + '</select>'
+    + '<label><input type="checkbox" id="pEscrow"> 托管（仅回合开始类）</label>'
+    + '<label>登记费我付</label><input type="number" id="pFee" min="0" max="5" value="5">'
+    + '</div></div>'
+    + '<div id="pMemo" style="display:none"><div class="row">'
+    + '<select id="mKind"><option value="GENERAL">一般备忘</option><option value="INTEL_RELAY">情报转述</option></select>'
+    + '<input type="text" id="mSummary" placeholder="140 字以内的摘要" style="width:280px"></div>'
+    + '<div class="row" id="mRelay" style="display:none">'
+    + '<label>标的</label><select id="mRound">' + rounds + '</select>'
+    + '<select id="mDomain">' + ['WAR','ENGINEERING','COMMERCE','ADMIN','CRISIS'].map((d) => '<option value="' + d + '">' + D_ZH[d] + '</option>').join('') + '</select>'
+    + '<select id="mField">' + ['name','entry','minFunds','minAbility','reward','risk','slots','auditOrder'].map((f) => '<option value="' + f + '">' + f + '</option>').join('') + '</select>'
+    + '<input type="text" id="mValue" placeholder="你声称的值"></div></div>'
+    + '<div class="row"><button class="primary" onclick="propose()">发给对方确认</button></div>';
+}
+
+function inboxBox() {
+  const mine = META.proposals.filter((x) => x.to === ME);
+  if (!mine.length) return '<h3>待你确认</h3><p class="muted">没有待确认的提案。</p>';
+  return '<h3>待你确认</h3>' + mine.map((x) =>
+    '<div class="row">座位 ' + x.from + '：' + esc(x.summary)
+    + ' <button class="primary" onclick="act(\'confirm\',{proposalId:\'' + x.proposalId + '\'})">确认</button>'
+    + ' <button onclick="act(\'reject\',{proposalId:\'' + x.proposalId + '\'})">拒绝</button></div>').join('');
+}
+
+// ── 提交表单 ──
+function submitForm() {
+  const q = qualOptions();
+  const teamRow = (d, withFunds, withBid) =>
+    '<div class="row"><label><input type="checkbox" id="on' + d + '"> ' + D_ZH[d] + '</label>'
+    + '<label>队号</label><input type="text" id="tid' + d + '" placeholder="队长分发的队号">'
+    + '<label>成员</label><input type="text" id="mem' + d + '" placeholder="如 1,3,7">'
+    + '<label>收款人</label><input type="number" id="pay' + d + '" min="1" max="12" value="' + ME + '">'
+    + (withFunds ? '<label>资金</label><input type="number" id="fnd' + d + '" min="0" value="0">' : '')
+    + '<label>能力</label><input type="number" id="abl' + d + '" min="0" value="0">'
+    + (withBid ? '<label>报价</label><input type="number" id="bid' + d + '" min="0" value="0">' : '')
+    + (d !== 'COMMERCE' ? '<label>资格</label><select id="qul' + d + '">' + q + '</select>' : '')
+    + '</div>';
+
+  return '<h3>秘密提交（提交后不得修改）</h3>'
+    + teamRow('ENGINEERING', false, true)
+    + teamRow('WAR', true, false)
+    + teamRow('COMMERCE', true, false)
+    + '<div class="row"><label><input type="checkbox" id="onADMIN"> ' + D_ZH.ADMIN + '</label>'
+    + '<label>能力</label><input type="number" id="ablADMIN" min="0" value="0">'
+    + '<label>资格</label><select id="qulADMIN">' + q + '</select></div>'
+    + '<div class="row"><label><input type="checkbox" id="onCRISIS"> ' + D_ZH.CRISIS + '</label>'
+    + '<label>资金</label><input type="number" id="fndCRISIS" min="0" value="0">'
+    + '<label>能力</label><input type="number" id="ablCRISIS" min="0" value="0">'
+    + (S.pledges.find((x) => x.seatId === ME)
+      ? '<span class="muted">你承诺过 ' + S.pledges.find((x) => x.seatId === ME).funds + ' / '
+        + S.pledges.find((x) => x.seatId === ME).ability + '</span>' : '')
+    + '</div>'
+    + '<div class="row"><label><input type="checkbox" id="buyQual"> 申请购买基础资格（锁定 20，结算时清点印章）</label></div>'
+    + '<div class="row"><button class="primary" onclick="submitAll()">提交</button></div>';
+}
+
+function submitAll() {
+  const entries = [];
+  const members = (id) => $(id).value.split(/[^0-9]+/).filter(Boolean).map(Number);
+  const g = (id) => Number($(id).value || 0);
+  const qv = (id) => ($(id) && $(id).value ? $(id).value : undefined);
+
+  if ($('onENGINEERING').checked) entries.push({ domain:'ENGINEERING', teamId:$('tidENGINEERING').value,
+    members: members('memENGINEERING'), payee: g('payENGINEERING'), ability: g('ablENGINEERING'),
+    bid: g('bidENGINEERING'), qualificationUsed: qv('qulENGINEERING') });
+  if ($('onWAR').checked) entries.push({ domain:'WAR', teamId:$('tidWAR').value,
+    members: members('memWAR'), payee: g('payWAR'), funds: g('fndWAR'), ability: g('ablWAR'),
+    qualificationUsed: qv('qulWAR') });
+  if ($('onCOMMERCE').checked) entries.push({ domain:'COMMERCE', teamId:$('tidCOMMERCE').value,
+    members: members('memCOMMERCE'), payee: g('payCOMMERCE'), funds: g('fndCOMMERCE'), ability: g('ablCOMMERCE') });
+  if ($('onADMIN').checked) entries.push({ domain:'ADMIN', ability: g('ablADMIN'), qualificationUsed: qv('qulADMIN') });
+  if ($('onCRISIS').checked) entries.push({ domain:'CRISIS', funds: g('fndCRISIS'), ability: g('ablCRISIS') });
+
+  for (const e of entries) if (e.qualificationUsed === undefined) delete e.qualificationUsed;
+  const submission = { entries };
+  if ($('buyQual').checked) submission.qualificationPurchase = true;
+  act('submit', { submission });
+}
+
+// ── 终局 ──
+function endingBox() {
+  const e = META.ending;
+  let h = '';
+  if (e) {
+    h += '<h3>' + esc(e.title) + '</h3>'
+      + '<p>第一层 时代结局：<b>' + esc(e.era.name) + '</b>（过线 ' + e.passCount + ' 人）——' + esc(e.era.note) + '</p>'
+      + '<p>第二层 政体结局：<b>' + esc(e.polity.name || '（无）') + '</b>'
+      + (e.polityFallback ? ' <span class="warn">（规则书未列此胜者组合，用了通则回退）</span>' : '') + '</p>'
+      + (e.epilogue.length ? e.epilogue.map((x) => '<p>第三层 后记：' + esc(x.text) + ' <span class="muted">（【' + x.name + '】/ ' + x.source + '）</span></p>').join('') : '');
+  }
+  if (META.autoAwards.length) {
+    h += '<h3>自动档成就</h3>' + META.autoAwards.map((a) =>
+      '<div>【' + a.name + '】' + (a.subjects.length ? a.subjects.map(seatLabel).join('、') : '（无特定归属）')
+      + ' <span class="muted">' + esc(a.evidence.note) + '</span></div>').join('');
+  }
+  if (META.ballotOpen && META.ballot) {
+    h += '<h3>终局投票</h3>' + META.ballot.questions.map((q) =>
+      '<div class="row"><label style="width:100%">' + esc(q.prompt) + '</label>'
+      + '<select id="v_' + q.id + '" style="width:100%">'
+      + q.options.map((o) => '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>').join('')
+      + '</select></div>').join('')
+      + '<div class="row"><button class="primary" onclick="castVote()">投票</button>'
+      + '<span class="muted">已投 ' + META.votesCast.length + '/12</span></div>';
+  }
+  if (META.nominatedAwards.length) {
+    h += '<h3>提名档结果</h3>' + META.nominatedAwards.map((a) =>
+      '<div>【' + a.name + '】' + (a.subjects.length ? a.subjects.map(seatLabel).join('、') : '全体') + '</div>').join('');
+  }
+  if (S.seed) h += '<p class="muted">种子已公开：<span class="mono">' + esc(S.seed) + '</span>——每一次抽签都可以自己复核。</p>';
+  return h;
+}
+
+function castVote() {
+  const picks = {};
+  for (const q of META.ballot.questions) picks[q.id] = $('v_' + q.id).value;
+  act('vote', { picks });
+}
+
+// ── 交互辅助 ──
+function openConv() {
+  const sel = $('cWith');
+  const others = [...sel.selectedOptions].map((o) => Number(o.value));
+  act('openConversation', { with: others });
+}
+
+function accuse(cid) {
+  const t = prompt('指控内容（140 字以内，会广播给全体）');
+  if (t) act('accuse', { contractId: cid, statement: t });
+}
+
+function rebut(cid) {
+  const t = prompt('反驳内容（140 字以内，会广播给全体）');
+  if (t) act('rebut', { contractId: cid, statement: t });
+}
+
+function propose() {
+  const to = Number($('pTo').value);
+  const tier = $('pTier').value;
+  if (tier === 'MEMO') {
+    const memo = { parties: [ME, to], summary: $('mSummary').value, kind: $('mKind').value };
+    if (memo.kind === 'INTEL_RELAY') {
+      memo.relayFrom = ME;
+      const v = $('mValue').value;
+      memo.intelClaim = { target: { round: Number($('mRound').value), domain: $('mDomain').value },
+        field: $('mField').value, claimedValue: isNaN(Number(v)) || v === '' ? v : Number(v) };
+    }
+    return act('propose', { proposal: { to, kind: 'MEMO', memo,
+      summary: '备忘契约：' + memo.summary } });
+  }
+  const payer = $('pPayer').value === 'other' ? to : ME;
+  const payee = payer === ME ? to : ME;
+  const kind = $('pTrig').value;
+  const round = Number($('pRound').value);
+  let trigger;
+  if (kind === 'PROJECT_RESULT') trigger = { kind, round, domain: $('pDomain').value, result: $('pResult').value };
+  else if (kind === 'PLAYER_AWARDED') trigger = { kind, round, domain: $('pDomain').value, seat: to, awarded: true };
+  else if (kind === 'CRISIS_RESULT') trigger = { kind, round, result: $('pResult').value === 'FAIL' ? 'FAIL' : 'SUCCESS' };
+  else if (kind === 'CRISIS_CONTRIBUTION') trigger = { kind, round, seat: to, resource: 'FUNDS', atLeast: 10 };
+  else if (kind === 'ROUND_START') trigger = { kind, round };
+  else trigger = { kind, seat: to, kind_: 'BASIC', byRound: round };
+
+  const fee = Math.max(0, Math.min(5, Number($('pFee').value)));
+  const notarized = { parties: [ME, to], payer, payee, trigger,
+    amount: Number($('pAmt').value), escrowed: $('pEscrow').checked,
+    expiresRound: Number($('pExp').value), feeSplit: [fee, 5 - fee] };
+  act('propose', { proposal: { to, kind: 'NOTARIZED', notarized,
+    summary: '公证契约：' + triggerZh(trigger) + ' → 座位 ' + payer + ' 付 座位 ' + payee + ' ' + notarized.amount } });
+}
+
+function render() {
+  renderHead(); renderCards(); renderSeats(); renderContracts(); renderLog(); renderAct();
+  const tier = $('pTier');
+  if (tier) {
+    tier.onchange = () => {
+      $('pNot').style.display = tier.value === 'NOTARIZED' ? '' : 'none';
+      $('pMemo').style.display = tier.value === 'MEMO' ? '' : 'none';
+    };
+    const mk = $('mKind');
+    if (mk) mk.onchange = () => { $('mRelay').style.display = mk.value === 'INTEL_RELAY' ? '' : 'none'; };
+  }
+}
+
+new EventSource('/api/stream?t=' + encodeURIComponent(TOKEN)).onmessage = () => pull();
+setInterval(() => { if (S && META && META.deadline) renderHead(); }, 1000);
+pull();
+</script>
+</body>
+</html>

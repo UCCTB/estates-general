@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>《三级会议》主持端</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="head"></div>
+  <div class="grid">
+    <div>
+      <div class="card" id="control"></div>
+      <div class="card" id="seats"></div>
+    </div>
+    <div>
+      <div class="card" id="ending"></div>
+      <div class="card"><h2>全量日志（含 HOST 事件）</h2><div class="log" id="log"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN = decodeURIComponent(location.pathname.replace(/^\/host\//, ''));
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+const ID_ZH = { KING:'国王', QUEEN:'王后', BISHOP:'主教', KNIGHT:'骑士', NOBLE:'贵族', CLERK:'书记官',
+  MERCHANT:'商人', GUILD_MASTER:'行会师傅', SCHOLAR:'学者', BURGHER:'市民', ARTISAN:'工匠', PEASANT:'农民' };
+const Q_ZH = { NONE:'无', BASIC:'基础', ENGINEERING:'工程', ADMIN:'行政', ORG:'组织', CORE:'核心' };
+const D_ZH = { WAR:'战争', ENGINEERING:'工程', COMMERCE:'商业', ADMIN:'行政', CRISIS:'危机' };
+const PHASE_ZH = { ROUND_START:'回合开始', REVEAL_AND_INTEL:'项目公布与情报', NEGOTIATION:'自由磋商',
+  SUBMISSION:'秘密提交', SETTLEMENT:'统一结算', GAME_END:'终局' };
+const NEXT_ZH = { ROUND_START:'开始本回合（发资格、判回合开始类契约、公布 5 张卡）',
+  REVEAL_AND_INTEL:'关闭情报窗口，进入自由磋商', NEGOTIATION:'结束磋商，进入秘密提交',
+  SUBMISSION:'截止提交并结算' };
+
+let S = null, META = null, msg = '', links = null;
+
+async function pull() {
+  const r = await fetch('/api/state?t=' + encodeURIComponent(TOKEN)).then((x) => x.json());
+  if (!r.ok) { document.body.innerHTML = '<div class="wrap"><div class="card err">' + esc(r.reason) + '</div></div>'; return; }
+  S = r.snapshot; META = r.meta;
+  render();
+}
+
+async function act(action, extra) {
+  const r = await fetch('/api/act?t=' + encodeURIComponent(TOKEN), {
+    method: 'POST', headers: { 'content-type':'application/json' },
+    body: JSON.stringify(Object.assign({ action }, extra || {})),
+  }).then((x) => x.json());
+  msg = r.ok ? '<span class="ok">' + esc(r.note || '完成') + '</span>' : '<span class="err">' + esc(r.reason) + '</span>';
+  if (r.links) links = r.links;
+  if (r.url) { links = null; msg += ' <span class="linkbox">新链接：' + location.origin + r.url + '</span>'; }
+  await pull();
+}
+
+function renderHead() {
+  const left = META.deadline ? Math.max(0, Math.round((META.deadline - Date.now()) / 1000)) : null;
+  $('head').innerHTML = '<h1>主持端｜' + S.gameId + '</h1>'
+    + '<div class="stat"><span>回合</span><b>' + S.round + '/6</b> '
+    + '<span>阶段</span><b>' + PHASE_ZH[S.phase] + '</b> '
+    + (left !== null ? '<span>剩余</span><b>' + left + ' 秒</b>' : '')
+    + '</div>'
+    + '<div class="muted" style="font-size:13px">种子承诺 <span class="mono">' + S.seedCommitment + '</span>'
+    + (S.seed ? '｜种子已公开 <span class="mono">' + esc(S.seed) + '</span>' : '') + '</div>'
+    + (msg ? '<div class="row">' + msg + '</div>' : '');
+}
+
+function renderControl() {
+  let h = '<h2>推进</h2>';
+  if (S.phase === 'SUBMISSION') {
+    h += '<p>已提交 <b>' + META.submitted.length + '/12</b>：' + (META.submitted.join('、') || '无')
+      + '<br><span class="muted">未提交的座位按空提交处理（TDD-001 §7.3）：不参加任何项目，危机贡献 0。</span></p>';
+  }
+  if (NEXT_ZH[S.phase]) {
+    h += '<div class="row"><button class="primary" onclick="act(\'advance\')">' + NEXT_ZH[S.phase] + '</button></div>';
+    h += '<div class="row"><label>阶段计时（秒，到点自动推进）</label>'
+      + '<input type="number" id="sec" min="0" value="600">'
+      + '<button onclick="act(\'timer\',{seconds:+$(\'sec\').value})">启动</button>'
+      + '<button onclick="act(\'timer\',{seconds:0})">取消</button></div>';
+  } else if (S.phase === 'GAME_END') {
+    h += '<div class="row">'
+      + (META.ballotOpen
+        ? '<button class="primary" onclick="act(\'closeVote\')">收票并计票（已投 ' + META.votesCast.length + '/12）</button>'
+        : (META.nominatedAwards.length || META.tallyLines.length ? '<span class="muted">投票已结束。</span>'
+          : '<button class="primary" onclick="act(\'openVote\')">开启终局投票</button>'))
+      + '</div>';
+  }
+
+  h += '<h2>座位令牌</h2><div class="row">'
+    + '<button onclick="act(\'links\')">显示全部 magic link</button>'
+    + '<span class="muted">重发令牌会立刻作废旧链接与旧会话（§7.2）。</span></div>';
+  if (links) {
+    h += '<table><tr><th>座位</th><th>身份</th><th>链接</th></tr>' + links.map((l) =>
+      '<tr><td>' + l.seatId + '</td><td>' + ID_ZH[S.seats[l.seatId - 1].identity] + '</td>'
+      + '<td class="linkbox"><a href="' + l.url + '" target="_blank">' + location.origin + l.url + '</a></td></tr>').join('')
+      + '</table>';
+  }
+  $('control').innerHTML = h;
+}
+
+function renderSeats() {
+  $('seats').innerHTML = '<h2>十二席</h2><table>'
+    + '<tr><th>座位</th><th>身份</th><th>可用</th><th>锁定</th><th>能力</th><th>资格</th><th>印章</th><th>记录</th><th>失信</th><th>在线</th><th></th></tr>'
+    + S.seats.map((s) => '<tr><td>' + s.seatId + '</td><td>' + ID_ZH[s.identity] + '</td>'
+      + '<td>' + s.holdings + '</td><td class="muted">—</td>'
+      + '<td>' + s.abilityBase + '</td>'
+      + '<td>' + (s.qualifications.length ? s.qualifications.map((q) => Q_ZH[q.kind]).join('、') : '—') + '</td>'
+      + '<td>' + s.stamps + '</td><td>' + s.records + '</td>'
+      + '<td' + (s.defaults.length ? ' class="err"' : '') + '>' + s.defaults.length + '</td>'
+      + '<td>' + (s.connected ? '●' : '○') + '</td>'
+      + '<td><button onclick="act(\'reissue\',{seatId:' + s.seatId + '})">重发</button></td></tr>').join('')
+    + '</table>';
+}
+
+function renderEnding() {
+  if (S.phase !== 'GAME_END') { $('ending').innerHTML = '<h2>终局</h2><p class="muted">第 6 回合结算后在此生成。</p>'; return; }
+  const e = META.ending;
+  let h = '<h2>终局</h2>';
+  if (e) {
+    h += '<h3>' + esc(e.title) + '</h3>'
+      + '<p>时代结局 <b>' + esc(e.era.name) + '</b>（Q = ' + e.passCount + '）｜政体结局 <b>' + esc(e.polity.name || '（无）') + '</b>'
+      + (e.polityFallback ? ' <span class="warn">（规则书 §20 未列此胜者组合，走了通则回退——记下来，供设计者按频次补表）</span>' : '') + '</p>'
+      + e.epilogue.map((x) => '<p>后记：' + esc(x.text) + ' <span class="muted">（【' + x.name + '】/ ' + x.source + '）</span></p>').join('');
+  }
+  h += '<h3>过线与名次</h3><table><tr><th>名次</th><th>座位</th><th>身份</th><th>资金</th><th>印章</th><th>记录</th><th>过线</th></tr>'
+    + S.seats.map((s) => '<tr><td>—</td><td>' + s.seatId + '</td><td>' + ID_ZH[s.identity] + '</td>'
+      + '<td>' + s.holdings + '</td><td>' + s.stamps + '</td><td>' + s.records + '</td><td></td></tr>').join('')
+    + '</table>';
+  if (META.autoAwards.length) {
+    h += '<h3>自动档成就（' + META.autoAwards.length + '）</h3>'
+      + META.autoAwards.map((a) => '<div>【' + a.name + '】'
+        + (a.subjects.length ? '座位 ' + a.subjects.join('、') : '（无特定归属）')
+        + ' <span class="muted">' + esc(a.evidence.note) + '｜判定 '
+        + ({ EXACT:'等价', NARROW:'收紧', FUZZY:'近似' })[a.evidence.approx] + '</span></div>').join('');
+  }
+  if (META.nominations.length) {
+    h += '<h3>提名档候选</h3>' + META.nominations.map((n) =>
+      '<div>【' + n.name + '】' + n.candidates.length + ' 个候选：'
+      + n.candidates.map((c) => '座位 ' + c.subjects.join('、')).join('；') + '</div>').join('');
+  }
+  if (META.tallyLines.length) {
+    h += '<h3>计票</h3>' + META.tallyLines.map((l) =>
+      '<div>' + l.key + '：' + (l.winner ? '<span class="ok">' + esc(l.winner) + '</span>' : '<span class="muted">未解锁</span>')
+      + ' <span class="muted">弃权 ' + l.abstain + '</span></div>').join('');
+  }
+  $('ending').innerHTML = h;
+}
+
+function renderLog() {
+  $('log').innerHTML = S.events.slice().reverse().slice(0, 400).map((e) => {
+    const brief = e.payload && e.payload.detail === 'ROUND_FACTS'
+      ? '（本回合结算事实快照，供成就查询）'
+      : esc(JSON.stringify(e.payload)).slice(0, 200);
+    return '<div><span class="muted mono">#' + e.seq + ' R' + e.round + ' ' + e.visibility + '</span> <b>'
+      + e.type + '</b> <span class="muted">' + brief + '</span></div>';
+  }).join('') || '<p class="muted">还没有事件。</p>';
+}
+
+function render() { renderHead(); renderControl(); renderSeats(); renderEnding(); renderLog(); }
+
+new EventSource('/api/stream?t=' + encodeURIComponent(TOKEN)).onmessage = () => pull();
+setInterval(() => { if (S && META && META.deadline) renderHead(); }, 1000);
+pull();
+</script>
+</body>
+</html>
