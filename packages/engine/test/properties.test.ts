@@ -11,12 +11,12 @@ import type { Game, PendingPayout, Qualification, SeatId, Submission, Submission
 import { lockSubmissions } from '../src/validate.js';
 import { settle, type SettleResults, type Team } from '../src/settle.js';
 import { roundStart } from '../src/roundStart.js';
-import { readyState, seatByIdentity, setRoundCard } from './helpers.js';
+import { negotiableState, seatByIdentity, setRoundCard } from './helpers.js';
 
 const ALL_SEATS: SeatId[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 const base: Game = (() => {
-  const s = readyState('prop-seed');
+  const s = negotiableState('prop-seed');
   setRoundCard(s, 'ENGINEERING', 'ENG_REPAIR_MILL');    // 无准入, 能力 60, cap 45
   setRoundCard(s, 'WAR', 'WAR_ROYAL_ESCORT');           // 无准入（裁定）, 10/40, 报酬 50
   setRoundCard(s, 'COMMERCE', 'COM_CAPITAL_FAIR');      // 30/20, 收益 55, 风险 0

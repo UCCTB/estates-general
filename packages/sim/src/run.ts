@@ -1,11 +1,13 @@
-// 跑一整局：initGame → (roundStart → 策略 → lockSubmissions → settle) × 6 → finalStanding。
+// 跑一整局（阶段 2）：initGame → (roundStart → 情报 → 谈判[契约/转账] → lockSubmissions → settle) × 6
+//                    → finalStanding + verifyIntelClaims。
 // 输出完全确定（同 seed 逐字节相同）：不含时间戳，不用 Math.random。
-// 指标对应规则书 §26 中可数值化部分；无谈判环节，涉及承诺/联盟的指标标注不适用。
-import type { Game, Identity, Qualification, SettleResults } from '@estates/engine';
+// 指标对应规则书 §26 中可数值化部分；契约/借贷/情报交易指标由阶段 2 谈判脚本产生。
+import type { Game, GameEvent, Identity, Qualification, SettleResults } from '@estates/engine';
 import {
-  finalStanding, initGame, lockSubmissions, roundStart, settle,
+  beginNegotiation, finalStanding, initGame, lockSubmissions, roundStart, settle, verifyIntelClaims,
 } from '@estates/engine';
 import { buildSubmissions } from './strategies.js';
+import { runIntelPhase, runNegotiation } from './negotiation.js';
 
 const IDENTITY_ZH: Record<Identity, string> = {
   KING: '国王', QUEEN: '王后', BISHOP: '主教', KNIGHT: '骑士', NOBLE: '贵族', CLERK: '书记官',
@@ -27,11 +29,37 @@ function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 
+// 把契约相关事件译成日志行
+function logContractEvents(state: Game, events: GameEvent[], lines: string[]): void {
+  const zh = (k: number) => IDENTITY_ZH[state.seats[k as 1].identity];
+  for (const e of events) {
+    const p = e.payload;
+    switch (e.type) {
+      case 'CONTRACT_FULFILLED':
+        lines.push(`  [履约] ${p['contractId']} ${zh(p['payer'] as number)}→${zh(p['payee'] as number)} ${p['amount']}${p['escrowed'] === true ? '（托管转付）' : ''}`);
+        break;
+      case 'CONTRACT_DEFAULTED':
+        lines.push(`  [失信] ${p['contractId']} ${zh(p['payer'] as number)} 欠 ${zh(p['payee'] as number)} ${p['owed']}，只付 ${p['paid']}，短缺 ${p['shortfall']}`);
+        break;
+      case 'CONTRACT_VOID':
+        lines.push(`  [作废] ${p['contractId']}（${p['reason']}）`);
+        break;
+      case 'PAYOUT':
+        if (p['kind'] === 'REWARD' && p['awardedRound'] !== undefined) {
+          lines.push(`  [到账] ${zh(p['seatId'] as number)} 收到第 ${p['awardedRound']} 回合${p['source']}收益 ${p['amount']}`);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 export function runGame(seed: string): string {
   const lines: string[] = [];
   let { state } = initGame(`sim-${seed}`, seed);
 
-  lines.push('=== 《三级会议》纯文本模拟器（阶段 1）===');
+  lines.push('=== 《三级会议》纯文本模拟器（阶段 2）===');
   lines.push(`seed: ${seed}`);
   lines.push(`seedCommitment: ${state.seedCommitment}`);
   lines.push(`初始资金总和: ${totalFunds(state)}`);
@@ -57,6 +85,12 @@ export function runGame(seed: string): string {
         lines.push(`  [资格生效] ${IDENTITY_ZH[id]} 取得 ${QUAL_ZH[p.kind]}${p.viaPurchase ? '（购买）' : '（晋升）'}`);
       }
     }
+    logContractEvents(state, rs.events, lines);
+
+    // 情报 → 谈判（契约 / 转账 / 指控）
+    state = runIntelPhase(state, lines);
+    state = beginNegotiation(state);
+    state = runNegotiation(state, lines);
 
     const subs = buildSubmissions(state);
     const lock = lockSubmissions(state, subs);
@@ -89,6 +123,7 @@ export function runGame(seed: string): string {
       + ` 能力 ${res.crisis.totalAbility}/${res.crisis.card.abilityTarget}`
       + (res.crisis.result === 'FAIL' ? ` → 全员 -${res.crisis.card.failPenalty}` : '')
       + `（贡献 ${contribCount} 人）`);
+    logContractEvents(state, settled.events, lines);
     lines.push(`资金总和: ${totalFunds(state)}`);
 
     m.teamsPerDomain.WAR += res.war.teams.length;
@@ -106,15 +141,22 @@ export function runGame(seed: string): string {
   }
 
   // ── 终局 ──
+  const verified = verifyIntelClaims(state);
+  state = verified.state;
   const standing = finalStanding(state);
   lines.push('=== 终局 ===');
   lines.push(`过线人数 Q = ${standing.passCount}`);
-  lines.push('身份\t座位\t资金\t印章(计入)\t记录\t资格\t过线\t名次');
+  lines.push('身份\t座位\t资金\t印章(计入)\t记录\t资格\t失信\t过线\t名次');
   const orderedRows = [...standing.rows].sort((a, b) => a.seatId - b.seatId);
   for (const row of orderedRows) {
+    const defaults = state.seats[row.seatId].defaults.length;
     lines.push(`${IDENTITY_ZH[row.identity]}\t${row.seatId}\t${row.funds}\t${row.stampsTotal}(${row.stampsEffective})`
-      + `\t${row.recordsTotal}\t${QUAL_ZH[row.highestQualification]}\t${row.qualified ? '是' : '否'}`
+      + `\t${row.recordsTotal}\t${QUAL_ZH[row.highestQualification]}\t${defaults}\t${row.qualified ? '是' : '否'}`
       + `\t${row.rank !== null ? row.rank + (row.winner ? '' : '（过线仍淘汰）') : '-'}`);
+  }
+  for (const e of verified.events) {
+    const p = e.payload;
+    lines.push(`[情报核验] ${p['contractId']} 声称 ${String(p['claimedValue'])}，真值 ${String(p['actualValue'])} → ${p['truthful'] === true ? '属实' : '谣言'}`);
   }
 
   // ── 观察指标（规则书 §26 可数值化部分）──
@@ -128,8 +170,24 @@ export function runGame(seed: string): string {
   lines.push(`商业平均风险值(R'): ${riskAvg === null ? '（无中标）' : fmt(riskAvg)}`);
   lines.push(`商业失败率: ${m.comAttempts === 0 ? '（无中标）' : `${m.comFails}/${m.comAttempts}`}`);
   lines.push(`公共危机成功率: ${m.crisisSuccesses}/6`);
-  lines.push('正式契约数量: 0（契约系统属阶段 2）');
-  lines.push('承诺-实际贡献差额 / 借贷 / 情报交易 / 联盟指标: 不适用（模拟器无自由磋商环节）');
+
+  const notarized = state.contracts.filter((c) => c.tier === 'NOTARIZED');
+  const memos = state.contracts.filter((c) => c.tier === 'MEMO');
+  const count = (st: string) => notarized.filter((c) => c.status === st).length;
+  lines.push(`正式契约数量: ${notarized.length}`
+    + `（履行 ${count('FULFILLED')} / 部分失信 ${count('PARTIAL_DEFAULT')} / 全额失信 ${count('DEFAULTED')}`
+    + ` / 作废 ${count('VOID')} / 取消 ${count('CANCELLED')}）`);
+  const totalDefaults = (Object.values(state.seats) as { defaults: unknown[] }[])
+    .reduce((a, s) => a + s.defaults.length, 0);
+  lines.push(`公开失信记录: ${totalDefaults} 条`);
+  lines.push(`备忘契约: ${memos.length} 份（指控 ${state.events.filter((e) => e.type === 'MEMO_ACCUSED').length}`
+    + ` / 反驳 ${state.events.filter((e) => e.type === 'MEMO_REBUTTED').length}）`);
+  lines.push(`非正式转账（借贷/投资）: ${state.events.filter((e) => e.type === 'TRANSFER').length} 笔`);
+  lines.push(`情报使用: ${state.events.filter((e) => e.type === 'INTEL_USED').length} 次；`
+    + `情报转述: ${memos.filter((c) => c.kind === 'INTEL_RELAY').length} 份`
+    + `（属实 ${verified.events.filter((e) => e.payload['truthful'] === true).length}`
+    + ` / 谣言 ${verified.events.filter((e) => e.payload['truthful'] === false).length}）`);
+  lines.push('联盟/中介涌现指标: 不适用（脚本策略无自由意志，留待真人试玩）');
 
   return lines.join('\n');
 }

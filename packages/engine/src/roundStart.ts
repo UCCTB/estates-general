@@ -5,6 +5,7 @@
 import type { Game, GameEvent, SeatId } from './types.js';
 import { emitEvent } from './events.js';
 import { flushPendingPayouts } from './payouts.js';
+import { stepBRoundStartContracts } from './contracts.js';
 
 export function roundStart(state: Game): { state: Game; events: GameEvent[] } {
   if (state.phase !== 'ROUND_START') throw new Error(`roundStart：阶段 ${state.phase} 不可开始回合`);
@@ -34,8 +35,11 @@ export function roundStart(state: Game): { state: Game; events: GameEvent[] } {
     seat.abilityCommitted = 0;
   }
 
-  // 步骤 b：回合开始类契约判定（TDD-001 §5.2 ROUND_START / QUALIFICATION_GAINED，
-  // 按 registeredAt 升序执行；托管转入 payee；到期未触发 → VOID）。阶段 2 空桩。
+  // 步骤 b：回合开始类契约判定（TDD-001 §6.4 b / §5.2 ROUND_START / QUALIFICATION_GAINED，
+  // 按 registeredAt 升序执行；托管转入 payee；byRound / expiresRound 到期未触发 → VOID）。
+  // 在步骤 a 之后：本回合刚生效的资格能触发 QUALIFICATION_GAINED；
+  // 在收益到账之后：上回合中标收益可用于偿付本回合到期的契约（「以未来收益为偿付来源」）。
+  stepBRoundStartContracts(s, events, s.round);
 
   // 步骤 c：公开本回合 5 张项目卡（卡面即 decks[domain][round-1]，以状态呈现；
   // §8.1 无对应事件类型，不发事件），进入 REVEAL_AND_INTEL

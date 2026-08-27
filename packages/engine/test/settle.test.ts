@@ -9,13 +9,13 @@ import { lockSubmissions } from '../src/validate.js';
 import { settle } from '../src/settle.js';
 import { roundStart } from '../src/roundStart.js';
 import { drawInt, drawU32 } from '../src/rng.js';
-import { readyState, seatByIdentity, setRoundCard, sumFunds } from './helpers.js';
+import { negotiableState, seatByIdentity, setRoundCard, sumFunds } from './helpers.js';
 
 const SEED = 'test-seed';
 const P = 5;   // 修复修道院 failPenalty
 
 function scenarioState(seed = SEED): Game {
-  const s = readyState(seed);
+  const s = negotiableState(seed);
   setRoundCard(s, 'CRISIS', 'CRI_REPAIR_MONASTERY');   // 无人贡献 → FAIL → 全员 -5
   return s;
 }
@@ -526,7 +526,7 @@ describe('步骤 10 / roundStart a：资格购买与晋升（2026-08-27 裁定 #
   });
 
   it('第 6 回合禁止购买（资格已无法生效）', () => {
-    const s = readyState(SEED);
+    const s = negotiableState(SEED);
     s.round = 6;
     const merchant = seatByIdentity(s, 'MERCHANT');
     s.seats[merchant].stamps.push({ round: 1, source: 'COMMERCE' }, { round: 2, source: 'COMMERCE' });
@@ -582,7 +582,7 @@ describe('边界情形（TDD-001 §10.2）与回放', () => {
   });
 
   it('同输入重放：终态与事件逐字节一致；资金守恒可核算', () => {
-    const s = readyState(SEED);
+    const s = negotiableState(SEED);
     const peasant = seatByIdentity(s, 'PEASANT');
     const noble = seatByIdentity(s, 'NOBLE');
     const subs: Submission[] = [

@@ -2,11 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Submission } from '../src/types.js';
 import { lockSubmissions } from '../src/validate.js';
-import { readyState, seatByIdentity, setRoundCard } from './helpers.js';
+import { negotiableState, seatByIdentity, setRoundCard } from './helpers.js';
 
 describe('lockSubmissions（TDD-001 §10.1）', () => {
   it('资金超限 → 拒绝整份提交', () => {
-    const s = readyState();
+    const s = negotiableState();
     const peasant = seatByIdentity(s, 'PEASANT');   // 资金 10
     const sub: Submission = {
       seatId: peasant, round: 1,
@@ -19,7 +19,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('能力超限 → 拒绝整份提交', () => {
-    const s = readyState();
+    const s = negotiableState();
     const king = seatByIdentity(s, 'KING');   // 能力 20
     const sub: Submission = {
       seatId: king, round: 1,
@@ -31,7 +31,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('多 entry 拆分能力合法（规则书 §5.2），总和超限拒绝', () => {
-    const s = readyState();
+    const s = negotiableState();
     const peasant = seatByIdentity(s, 'PEASANT');   // 能力 90
     const ok: Submission = {
       seatId: peasant, round: 1,
@@ -52,7 +52,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('未持有 / 已用 / 重复使用的资格 → 拒绝整份提交', () => {
-    const s = readyState();
+    const s = negotiableState();
     const peasant = seatByIdentity(s, 'PEASANT');   // 无资格
     const notHeld: Submission = {
       seatId: peasant, round: 1,
@@ -71,7 +71,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
     expect(lockSubmissions(s, [dup]).rejected[0]!.reason).toContain('重复使用');
 
     // 已用：先把资格标记为本回合已使用
-    const s2 = readyState();
+    const s2 = negotiableState();
     const king2 = seatByIdentity(s2, 'KING');
     s2.seats[king2].qualifications[0]!.usedThisRound = true;
     const used: Submission = {
@@ -82,7 +82,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('工程 bid 越界 → 仅拒绝该 entry，其余保留', () => {
-    const s = readyState();
+    const s = negotiableState();
     setRoundCard(s, 'ENGINEERING', 'ENG_REPAIR_MILL');   // cap 45，合法 [23, 45]
     const peasant = seatByIdentity(s, 'PEASANT');
     const sub: Submission = {
@@ -99,7 +99,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('ADMIN / CRISIS entry 多于一条 → 拒绝整份提交', () => {
-    const s = readyState();
+    const s = negotiableState();
     const scholar = seatByIdentity(s, 'SCHOLAR');
     const twoAdmin: Submission = {
       seatId: scholar, round: 1,
@@ -114,7 +114,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('qualificationPurchase：已持有资格 → 拒绝该字段，提交其余部分保留', () => {
-    const s = readyState();
+    const s = negotiableState();
     const king = seatByIdentity(s, 'KING');   // 持核心资格
     const sub: Submission = {
       seatId: king, round: 1,
@@ -129,7 +129,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('qualificationPurchase：无资格即可锁定 20（印章在结算时点数，2026-08-27 裁定 #10）', () => {
-    const s = readyState();
+    const s = negotiableState();
     const merchant = seatByIdentity(s, 'MERCHANT');   // 无资格、无印章——照样锁定，结算时不足则退
     const sub: Submission = { seatId: merchant, round: 1, entries: [], qualificationPurchase: true };
     const r = lockSubmissions(s, [sub]);
@@ -139,7 +139,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('锁定后 funds/lockedFunds/abilityCommitted/usedThisRound 正确', () => {
-    const s = readyState();
+    const s = negotiableState();
     const king = seatByIdentity(s, 'KING');
     const sub: Submission = {
       seatId: king, round: 1,
@@ -155,7 +155,7 @@ describe('lockSubmissions（TDD-001 §10.1）', () => {
   });
 
   it('members 不含提交者本人 → 该 entry 被剔除', () => {
-    const s = readyState();
+    const s = negotiableState();
     const king = seatByIdentity(s, 'KING');
     const queen = seatByIdentity(s, 'QUEEN');
     const sub: Submission = {

@@ -34,6 +34,9 @@ export interface Game {
   pendingQualifications: PendingQualification[];
   // 2026-08-27 裁定（issues #12）：中标收益下一回合到账的在途队列；第 6 回合中标则终局前即时到账
   pendingPayouts: PendingPayout[];
+  // 情报揭示历史（TDD-001 §4.5；§4.1 未声明存放位置，同 issues #1 处理）：
+  // 用于「同一项目不重复揭示已获知字段」（规则书 §5.3）与终局复盘
+  intelReveals: IntelReveal[];
 }
 
 export interface Seat {

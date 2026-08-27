@@ -99,9 +99,11 @@ function validateOne(
 }
 
 // 锁定全部提交。缺席或未提交的座位视为空提交（TDD-001 §7.3），无需出现在 submissions 中。
+// 阶段机严格线性（§3.2）：只接受 NEGOTIATION（进入 SUBMISSION）或 SUBMISSION（逐份追加）；
+// REVEAL_AND_INTEL 直接提交属调用方漏掉 beginNegotiation，抛错而非静默跳过谈判窗口。
 export function lockSubmissions(state: Game, submissions: Submission[]): LockResult {
-  if (state.phase !== 'REVEAL_AND_INTEL' && state.phase !== 'NEGOTIATION' && state.phase !== 'SUBMISSION') {
-    throw new Error(`lockSubmissions：阶段 ${state.phase} 不接受提交`);
+  if (state.phase !== 'NEGOTIATION' && state.phase !== 'SUBMISSION') {
+    throw new Error(`lockSubmissions：阶段 ${state.phase} 不接受提交（需先 beginNegotiation）`);
   }
   const s = structuredClone(state);
   s.phase = 'SUBMISSION';

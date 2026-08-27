@@ -8,6 +8,7 @@ import { emitEvent } from './events.js';
 import { drawInt, drawU32 } from './rng.js';
 import { entrySatisfiedByOne, entrySatisfiedByTeam } from './qualification.js';
 import { flushPendingPayouts } from './payouts.js';
+import { step8Execute, type SettleFacts } from './contracts.js';
 import { WAR_BONUS_CAP, WAR_QUALIFICATION_BONUS } from './data/war-bonus.js';
 
 // ── 内部结构 ─────────────────────────────────────────────────────────
@@ -408,11 +409,32 @@ export function step7Deductions(ctx: Ctx, r: SettleResults): void {
   }
 }
 
-// 步骤 8：公证契约。阶段 2 实现（TDD-001 §6.2 步骤 8、§5.4/§5.5）：
+// 步骤 8：公证契约（TDD-001 §6.2 步骤 8、§5.4/§5.5）。
 // 收集本回合结算类触发（PROJECT_RESULT / PLAYER_AWARDED / CRISIS_RESULT / CRISIS_CONTRIBUTION），
-// 对 ACTIVE 且匹配的契约按 registeredAt 升序执行；到期未触发 → VOID。本阶段留空桩。
-export function step8NotarizedContracts(_ctx: Ctx, _r: SettleResults): void {
-  // 阶段 2 空桩
+// 对 ACTIVE 且匹配的契约按 registeredAt 升序执行；到期未触发 → VOID；
+// 第 6 回合结算后所有仍 ACTIVE 的契约一律 VOID（托管退回，不计失信）。
+// 注意时序：中标收益在下一回合才到账（issues #12），本步骤的条件付款只能动用现有余额——
+// 想以中标收益偿付的债务应使用 ROUND_START(下一回合) 触发（roundStart 先到账再执行契约）。
+// PLAYER_AWARDED 的「中标」= 出现在中标队 members / 录取名单（§5.2）；商业 FAIL 仍算中标。
+export function step8NotarizedContracts(ctx: Ctx, r: SettleResults): void {
+  const facts: SettleFacts = {
+    round: ctx.round,
+    projectResult: {
+      ENGINEERING: r.engineering.winner ? 'SUCCESS' : 'NO_AWARD',
+      WAR: r.war.winner ? 'SUCCESS' : 'NO_AWARD',
+      COMMERCE: r.commerce.result,
+      ADMIN: r.admin.selected.length > 0 ? 'SUCCESS' : 'NO_AWARD',
+    },
+    awardedSeats: {
+      ENGINEERING: r.engineering.winner?.members ?? [],
+      WAR: r.war.winner?.members ?? [],
+      COMMERCE: r.commerce.winner?.members ?? [],
+      ADMIN: r.admin.selected,
+    },
+    crisisResult: r.crisis.result,
+    crisisContributions: r.crisis.contributions,
+  };
+  step8Execute(ctx.s, ctx.out, facts);
 }
 
 // 步骤 9：记录。项目成功记录（中标队有效参与者，§6.3）；履历印章（每人每回合 ≤ 1，
@@ -542,14 +564,21 @@ export function settle(
   }
   // 锁定一致性断言（TDD-001 §6.2 步骤 0）：每座位的锁定资金与已投能力
   // 必须与传入的被接受提交严格对应，未经 lockSubmissions 的提交不得进入结算。
-  // 阶段 1 无契约托管；阶段 2 引入托管后此处须把托管额计入 lockedFunds 期望值。
+  // 锁定 = 本回合提交锁定 + ACTIVE 公证契约的托管额（§5.4）。
   {
     const bySeat = new Map(submissions.map((sub) => [sub.seatId, sub]));
+    const escrowBySeat = new Map<SeatId, number>();
+    for (const c of state.contracts) {
+      if (c.tier === 'NOTARIZED' && c.status === 'ACTIVE' && c.escrowed) {
+        escrowBySeat.set(c.payer, (escrowBySeat.get(c.payer) ?? 0) + c.amount);
+      }
+    }
     for (const seatId of Object.keys(state.seats).map(Number) as SeatId[]) {
       const sub = bySeat.get(seatId);
-      const expectedLock = sub === undefined ? 0
-        : sub.entries.reduce((a, e) => a + ('funds' in e ? e.funds : 0), 0)
-          + (sub.qualificationPurchase === true ? QUALIFICATION_PURCHASE_COST : 0);
+      const expectedLock = (escrowBySeat.get(seatId) ?? 0)
+        + (sub === undefined ? 0
+          : sub.entries.reduce((a, e) => a + ('funds' in e ? e.funds : 0), 0)
+            + (sub.qualificationPurchase === true ? QUALIFICATION_PURCHASE_COST : 0));
       const expectedAbility = sub === undefined ? 0
         : sub.entries.reduce((a, e) => a + e.ability, 0);
       const seat = state.seats[seatId];

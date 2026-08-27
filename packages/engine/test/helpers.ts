@@ -2,14 +2,20 @@
 import type { Domain, Game, Identity, SeatId } from '../src/types.js';
 import { initGame } from '../src/init.js';
 import { roundStart } from '../src/roundStart.js';
+import { beginNegotiation } from '../src/phases.js';
 
 export function freshState(seed = 'test-seed'): Game {
   return initGame('test-game', seed).state;
 }
 
-// 建局并进入第 1 回合的可提交状态
+// 建局并进入第 1 回合的情报阶段（REVEAL_AND_INTEL）
 export function readyState(seed = 'test-seed'): Game {
   return roundStart(freshState(seed)).state;
+}
+
+// 建局并进入第 1 回合的谈判阶段（可登记契约、可提交）
+export function negotiableState(seed = 'test-seed'): Game {
+  return beginNegotiation(readyState(seed));
 }
 
 export function seatByIdentity(state: Game, identity: Identity): SeatId {
