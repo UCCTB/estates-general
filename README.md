@@ -16,6 +16,7 @@ packages/
   engine/   纯逻辑裁判引擎（无 I/O、无 Math.random、无时钟）
   sim/      纯文本模拟器：12 个脚本化策略跑 6 回合，输出观察指标
   server/   Game Server + 座位令牌 + 玩家端 / 主持端（零运行时依赖）
+  web/      公开评审站：把 server 的 router 搬进浏览器跑，纯静态部署
 docs/
   rulebook-v1.md
   tdd-001-issues.md
@@ -28,7 +29,7 @@ docs/
 
 ```bash
 pnpm install
-pnpm test          # 引擎 + 模拟器 + 服务端，共 134 个测试
+pnpm test          # 引擎 + 模拟器 + 服务端，共 139 个测试
 pnpm typecheck
 pnpm sim --seed demo   # 跑一整局，打印结算过程、三层结局与已解锁成就
 ```
@@ -53,3 +54,22 @@ pnpm serve         # 默认 http://localhost:8787
 
 环境变量：`PORT`（默认 8787）、`ESTATES_SECRET`（签令牌用；不设则每次启动随机生成，
 重启即作废全部旧链接）、`ESTATES_DATA_DIR`（房间存档目录，默认 `data/`，不入库）。
+
+存档是房间的全量快照，所以设了固定的 `ESTATES_SECRET` 之后，服务端重启、旧链接照样打得开。
+
+## 公开评审站
+
+`packages/web` 把 Game Server 的 router 原样搬进浏览器：`node:http` 换成 patch 过的
+`window.fetch`，SSE 换成 `BroadcastChannel`，JSON 存档换成 `localStorage`。
+路由表、令牌校验、可见性裁剪、动作白名单一行都没有重写——沙盒 import 的就是
+`packages/server` 里那份 `createRouter`。玩家端 / 主持端的 HTML 也是原件，构建时只在
+`<head>` 里插了一行 `sandbox.js`。
+
+```bash
+pnpm build                          # → packages/web/dist（纯静态）
+pnpm --filter @estates/web smoke     # 把构建产物丢进假 window 跑一遍
+```
+
+跟真服务端的三条差别：链接只在**签发它的那台浏览器**里有效（密钥和存档都在本机
+localStorage）；房间对象每次请求现建现弃，所以倒计时到点后的自动推进由主持端那个 tab
+发起；清掉站点数据 = 掀桌。要 12 个人真的同桌，还是 `pnpm serve`。

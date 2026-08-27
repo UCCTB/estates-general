@@ -1,0 +1,12 @@
+/* 只加一条横幅。玩家端 / 主持端的 app.css 与 HTML 都是仓库原件，不动。 */
+.sandbox-banner {
+  border: 1px solid #cfc7b6;
+  border-left: 3px solid #7a2e1d;
+  background: #fdf6ec;
+  padding: 7px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #6f6858;
+}
+.sandbox-banner a { color: #7a2e1d; }

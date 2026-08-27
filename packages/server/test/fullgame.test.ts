@@ -35,7 +35,7 @@ async function state(token: string): Promise<{ snapshot: Record<string, unknown>
 const phaseOf = async (t: string) => (await state(t)).snapshot['phase'] as string;
 
 beforeAll(async () => {
-  process.env['ESTATES_DATA_DIR'] = 'data-test';
+  // 不装 fsStore（那是 main.ts 的事），所以整局只在内存里，测试不落盘
   server = startServer('test-secret', 0);
   await new Promise<void>((r) => server.once('listening', r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

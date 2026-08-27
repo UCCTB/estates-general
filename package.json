@@ -9,6 +9,7 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "sim": "pnpm --filter @estates/sim start --",
-    "serve": "pnpm --filter @estates/server start"
+    "serve": "pnpm --filter @estates/server start",
+    "build": "pnpm --filter @estates/web build"
   }
 }

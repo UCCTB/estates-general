@@ -34,7 +34,14 @@ TDD-001 与规则书冲突时，以 TDD-001 为准（差异清单见 TDD-001 附
   - `packages/sim` — 纯文本模拟器：12 个脚本化策略跑 6 回合，输出规则书 §26 观察指标。只依赖 engine。
   - `packages/server` — Game Server（node:http + SSE，零运行时依赖）+ 座位令牌 + 玩家端 / 主持端。
     玩家端不是独立包：`packages/server/public/` 下的三个静态 HTML，无构建步骤，改完刷新即可。
-- 命令：`pnpm test` / `pnpm typecheck` / `pnpm sim --seed demo` / `pnpm serve`（默认 :8787）
+    `router.ts` / `room.ts` 与传输无关（不 import `node:*`）；`http.ts` + `fsStore.ts` 是 Node 那副传输，
+    `packages/web` 是浏览器那副。**加路由、加动作只改 `router.ts`，别在 `http.ts` 里加。**
+  - `packages/web` — 公开评审站（部署在 Vercel，纯静态）。把上面那份 router 用 esbuild 打进浏览器，
+    跑在 patch 过的 `window.fetch` / `BroadcastChannel` / `localStorage` 上。
+    `packages/server/public/` 的三个 HTML 原样搬运，构建时只在 `<head>` 插一行 `sandbox.js`——
+    **不要为了沙盒去改玩家端 HTML**，改了公开评审看到的就不是仓库里那份了。
+- 命令：`pnpm test` / `pnpm typecheck` / `pnpm sim --seed demo` / `pnpm serve`（默认 :8787）/
+  `pnpm build`（评审站）/ `pnpm --filter @estates/web smoke`（沙盒冒烟）
 
 ## 工作顺序（对应 TDD-001 §14）
 

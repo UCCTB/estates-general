@@ -6,10 +6,12 @@
 // 重启即作废全部旧链接，这对本地试玩正好，也免得把密钥写进仓库。
 import { randomBytes } from 'node:crypto';
 import { startServer } from './http.js';
+import { installFsStore } from './fsStore.js';
 
 const port = Number(process.env['PORT'] ?? 8787);
 const secret = process.env['ESTATES_SECRET'] ?? randomBytes(32).toString('hex');
 
+installFsStore();
 startServer(secret, port);
 
 console.log(`《三级会议》Game Server 已启动：http://localhost:${port}`);

@@ -1,7 +1,5 @@
 // 房间：持有一局的全部状态，驱动阶段，把玩家操作转成引擎输入，把引擎事件广播出去。
 // 引擎是无 I/O 的纯逻辑包（TDD-001 §3.1）；一切副作用——时钟、持久化、会话——都在这里。
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type {
   AchievementAward, Ballot, Ending, Game, GameEvent, MemoDraft, Nomination,
   NotarizedDraft, SeatId, Submission, TallyLine, Votes,
@@ -15,7 +13,6 @@ import {
 import { mintToken, newNonce } from './tokens.js';
 
 const ALL_SEATS: readonly SeatId[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const DATA_DIR = process.env['ESTATES_DATA_DIR'] ?? 'data';
 
 export type Fail = { ok: false; reason: string };
 export type Ok<T = unknown> = { ok: true } & T;
@@ -85,7 +82,6 @@ export class Room {
     for (const s of ALL_SEATS) this.nonces[s] = newNonce();
     // 建局时全部座位默认未连接；兑换令牌时置为 connected（§7.2）
     for (const s of ALL_SEATS) this.state.seats[s].connected = false;
-    this.save();
   }
 
   // ── 令牌 ───────────────────────────────────────────────────────────
@@ -126,20 +122,57 @@ export class Room {
 
   private bump(): void {
     this.version += 1;
-    this.save();
+    store.put(this);
     for (const fn of this.listeners) fn();
   }
 
-  private save(): void {
-    try {
-      mkdirSync(DATA_DIR, { recursive: true });
-      writeFileSync(join(DATA_DIR, `${this.gameId}.json`), JSON.stringify({
-        gameId: this.gameId, nonces: this.nonces, hostNonce: this.hostNonce,
-        state: this.state, accepted: this.accepted, ending: this.ending,
-      }, null, 0), 'utf8');
-    } catch {
-      // 持久化失败不影响进行中的一局；主持端仍有完整的内存状态
-    }
+  /** 全量快照：房间的每一个可变字段都在里面，restore() 能还原出等价的一局。 */
+  toJSON(): RoomData {
+    return {
+      gameId: this.gameId,
+      nonces: this.nonces,
+      hostNonce: this.hostNonce,
+      version: this.version,
+      deadline: this.deadline,
+      state: this.state,
+      accepted: this.accepted,
+      proposals: this.proposals,
+      conversations: this.conversations,
+      proposalSeq: this.proposalSeq,
+      ending: this.ending,
+      ballot: this.ballot,
+      ballotOpen: this.ballotOpen,
+      nominations: this.nominations,
+      autoAwards: this.autoAwards,
+      nominatedAwards: this.nominatedAwards,
+      tallyLines: this.tallyLines,
+      votes: this.votes,
+      votesCast: this.votesCast,
+    };
+  }
+
+  /** 从快照还原。定时器与订阅者不还原——那是当前进程 / 当前 tab 的事。 */
+  static restore(d: RoomData, secret: string): Room {
+    const room = new Room(d.gameId, d.state.seed, secret);
+    room.state = d.state;
+    room.nonces = d.nonces;
+    room.hostNonce = d.hostNonce;
+    room.version = d.version;
+    room.deadline = d.deadline;
+    room.accepted = d.accepted;
+    room.proposals = d.proposals;
+    room.conversations = d.conversations;
+    room.proposalSeq = d.proposalSeq;
+    room.ending = d.ending;
+    room.ballot = d.ballot;
+    room.ballotOpen = d.ballotOpen;
+    room.nominations = d.nominations;
+    room.autoAwards = d.autoAwards;
+    room.nominatedAwards = d.nominatedAwards;
+    room.tallyLines = d.tallyLines;
+    room.votes = d.votes;
+    room.votesCast = d.votesCast;
+    return room;
   }
 
   /** 事件日志是 append-only（TDD-001 约束 3）；服务端自身的事件也走同一条日志。 */
@@ -176,7 +209,9 @@ export class Room {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     if (seconds === null || seconds <= 0) { this.deadline = null; this.bump(); return; }
     this.deadline = Date.now() + seconds * 1000;
-    this.timer = setTimeout(() => { this.timer = null; this.deadline = null; this.advance(); }, seconds * 1000);
+    if (timersEnabled) {
+      this.timer = setTimeout(() => { this.timer = null; this.deadline = null; this.advance(); }, seconds * 1000);
+    }
     this.bump();
   }
 
@@ -408,33 +443,75 @@ export class Room {
 }
 
 // ── 房间登记表 ───────────────────────────────────────────────────────
+//
+// 房间放哪儿、怎么落盘，是宿主的事，不是房间的事。Node 服务端用「内存 Map + JSON
+// 文件」，浏览器沙盒用 localStorage——两边跑的是同一份 room.ts 与同一份 router.ts。
 
-const rooms = new Map<string, Room>();
+/** Room 的全量快照。字段与 Room 的可变成员一一对应。 */
+export interface RoomData {
+  gameId: string;
+  nonces: Record<number, string>;
+  hostNonce: string;
+  version: number;
+  deadline: number | null;
+  state: Game;
+  accepted: Submission[];
+  proposals: Proposal[];
+  conversations: Conversation[];
+  proposalSeq: number;
+  ending: Ending | null;
+  ballot: Ballot | null;
+  ballotOpen: boolean;
+  nominations: Nomination[];
+  autoAwards: AchievementAward[];
+  nominatedAwards: AchievementAward[];
+  tallyLines: TallyLine[];
+  votes: Votes;
+  votesCast: SeatId[];
+}
+
+export interface RoomStore {
+  get(gameId: string, secret: string): Room | undefined;
+  put(room: Room): void;
+  list(): Room[];
+}
+
+/** 默认：只在内存里。不落盘——进程退出即忘。 */
+function memoryStore(): RoomStore {
+  const rooms = new Map<string, Room>();
+  return {
+    get: (gameId) => rooms.get(gameId),
+    put: (room) => { rooms.set(room.gameId, room); },
+    list: () => [...rooms.values()],
+  };
+}
+
+let store: RoomStore = memoryStore();
+
+export function setRoomStore(s: RoomStore): void {
+  store = s;
+}
+
+// 房间自带的倒计时用 setTimeout，回调闭包抓着 this。浏览器沙盒里房间对象每次请求
+// 都从 localStorage 重建，那个 this 转眼就是作废的副本——所以宿主可以关掉它，
+// 自己按 meta.deadline 安排推进。
+let timersEnabled = true;
+
+export function setRoomTimers(enabled: boolean): void {
+  timersEnabled = enabled;
+}
 
 export function createRoom(seed: string, secret: string): Room {
   const gameId = `G${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
   const room = new Room(gameId, seed, secret);
-  rooms.set(gameId, room);
+  store.put(room);
   return room;
 }
 
-export function getRoom(gameId: string): Room | undefined {
-  return rooms.get(gameId);
+export function getRoom(gameId: string, secret: string): Room | undefined {
+  return store.get(gameId, secret);
 }
 
 export function listRooms(): Room[] {
-  return [...rooms.values()];
-}
-
-/** 服务端重启后列出磁盘上的存档，供主持端确认（本版不自动恢复运行中的一局）。 */
-export function listArchives(): string[] {
-  try {
-    return readdirSync(DATA_DIR).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''));
-  } catch {
-    return [];
-  }
-}
-
-export function readArchive(gameId: string): unknown {
-  return JSON.parse(readFileSync(join(DATA_DIR, `${gameId}.json`), 'utf8'));
+  return store.list();
 }
