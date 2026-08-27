@@ -7,11 +7,14 @@
 //   每回合：贵族投资商人——转账 10，登记「本回合商业成功商人付 15」（结算类触发；
 //       注意收益下一回合才到账，商人可能被迫部分失信——设计后果的活样本）
 //   农民首次失信后：贵族在备忘上指控一次，农民反驳一次
+//   每回合末：12 席按各自即将提交的危机贡献登记公开承诺（TDD-002 §9.2 CR-2），
+//       国王额外虚报 30 资金——一个照着规则书 §17.3 造出来的搭便车样本
 import type { Game, MemoContract, Round, SeatId } from '@estates/engine';
 import {
-  accuseMemoContract, rebutMemoContract, registerMemoContract, registerNotarizedContract,
-  transfer, useIntel,
+  accuseMemoContract, pledgeCrisis, rebutMemoContract, registerMemoContract,
+  registerNotarizedContract, transfer, useIntel,
 } from '@estates/engine';
+import { buildSubmissions } from './strategies.js';
 
 function seatOf(state: Game, identity: string): SeatId {
   for (const k of Object.keys(state.seats).map(Number) as SeatId[]) {
@@ -65,12 +68,14 @@ export function runNegotiation(state: Game, log: string[]): Game {
         target: { round: 2, domain: 'COMMERCE' }, field: 'minFunds',
         claimedValue: s.decks.COMMERCE[1]!.minFunds!,   // 学者刚侦察过，照实转述
       },
+      relayFrom: SCHOLAR,
     });
     if (honest.ok) { s = honest.state; log.push(`  [备忘] ${honest.contractId} 学者→商人 情报转述（诚实）`); }
 
     const lie = registerMemoContract(s, {
       parties: [BISHOP, QUEEN], summary: '下回合战争要 999 资金（假）', kind: 'INTEL_RELAY',
       intelClaim: { target: { round: 2, domain: 'WAR' }, field: 'minFunds', claimedValue: 999 },
+      relayFrom: BISHOP,
     });
     if (lie.ok) { s = lie.state; log.push(`  [备忘] ${lie.contractId} 主教→王后 情报转述（伪造）`); }
   }
@@ -119,6 +124,26 @@ export function runNegotiation(state: Game, log: string[]): Game {
       if (reb.ok) { s = reb.state; log.push('  [反驳] 农民反驳指控'); }
     }
   }
+
+  // 危机承诺（TDD-002 §9.2 CR-2）：谈判的最后一步，各自把打算投入的数额挂到公告板上。
+  // 承诺不消耗资源、不强制执行，兑不兑现是信用问题——这里让 11 席说到做到，
+  // 国王虚报 30 资金，好让【共同体】与【公地悲剧】两条判定都有真实样本。
+  const planned = new Map<SeatId, { funds: number; ability: number }>();
+  for (const sub of buildSubmissions(s)) {
+    for (const e of sub.entries) {
+      if (e.domain === 'CRISIS') planned.set(sub.seatId, { funds: e.funds, ability: e.ability });
+    }
+  }
+  for (const seatId of (Object.keys(s.seats).map(Number) as SeatId[]).sort((a, b) => a - b)) {
+    const p = planned.get(seatId) ?? { funds: 0, ability: 0 };
+    const inflate = seatId === KING ? 30 : 0;
+    const r = pledgeCrisis(s, seatId, p.funds + inflate, p.ability);
+    if (r.ok) s = r.state;
+  }
+  const pledged = s.crisisPledges.filter((p) => p.round === round);
+  const pf = pledged.reduce((a, p) => a + p.funds, 0);
+  const pa = pledged.reduce((a, p) => a + p.ability, 0);
+  log.push(`  [承诺] ${pledged.length} 席登记危机承诺，合计 ${pf} 资金 / ${pa} 能力（国王虚报 30）`);
 
   return s;
 }

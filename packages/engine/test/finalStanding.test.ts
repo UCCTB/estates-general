@@ -76,8 +76,17 @@ describe('finalStanding（规则书 §2）', () => {
     expect(row(1).qualified).toBe(true);
     expect(row(1).winner).toBe(false);
     expect(row(10).winner).toBe(true);
-    // 平局抽签 key 逐个记入事件日志（TDD-001 §6.5）
-    expect(events.filter((e) => e.type === 'RNG_DRAWN' && e.payload['purpose'] === 'FINAL_RANK')).toHaveLength(7);
+    // 平局抽签 key 逐个记入事件日志（TDD-001 §6.5）。
+    // TDD-002 §9.3 CR-3：key 覆盖全部 12 席（index = seatId − 1），
+    // 因此不随过线人数变化，重放同一 seed 必得同一结果。
+    expect(events.filter((e) => e.type === 'RNG_DRAWN' && e.payload['purpose'] === 'FINAL_RANK')).toHaveLength(12);
+    // overallRank 全席唯一，过线者在前
+    const ranks = rows.map((r) => r.overallRank).sort((a, b) => a - b);
+    expect(ranks).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    for (const r of rows) {
+      if (r.qualified) expect(r.overallRank).toBe(r.rank);
+      else expect(r.overallRank).toBeGreaterThan(passCount);
+    }
   });
 
   it('完全平局由 seed 派生抽签决定，且结果确定', () => {

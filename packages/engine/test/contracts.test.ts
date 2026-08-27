@@ -458,10 +458,25 @@ describe('备忘契约（§5.7）', () => {
     expect(registerMemoContract(s, {
       parties: [scholar, merchant], summary: '啰'.repeat(141), kind: 'GENERAL',
     }).ok).toBe(false);
+    // TDD-002 §9.1 CR-1：缺 relayFrom / relayFrom 不是当事人 → 拒绝
     expect(registerMemoContract(s, {
       parties: [scholar, merchant], summary: '下回合商业最低出资', kind: 'INTEL_RELAY',
       intelClaim: { target: { round: 2, domain: 'COMMERCE' }, field: 'minFunds', claimedValue: 40 },
-    }).ok).toBe(true);
+    }).ok).toBe(false);
+    expect(registerMemoContract(s, {
+      parties: [scholar, merchant], summary: '下回合商业最低出资', kind: 'INTEL_RELAY',
+      intelClaim: { target: { round: 2, domain: 'COMMERCE' }, field: 'minFunds', claimedValue: 40 },
+      relayFrom: seatByIdentity(s, 'KING'),
+    }).ok).toBe(false);
+    const okRelay = registerMemoContract(s, {
+      parties: [scholar, merchant], summary: '下回合商业最低出资', kind: 'INTEL_RELAY',
+      intelClaim: { target: { round: 2, domain: 'COMMERCE' }, field: 'minFunds', claimedValue: 40 },
+      relayFrom: scholar,
+    });
+    expect(okRelay.ok).toBe(true);
+    if (!okRelay.ok) return;
+    const memo = okRelay.state.contracts.find((c) => c.contractId === okRelay.contractId)!;
+    expect(memo.tier === 'MEMO' && memo.relayFrom).toBe(scholar);
   });
 });
 

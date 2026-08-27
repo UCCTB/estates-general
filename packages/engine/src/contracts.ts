@@ -162,6 +162,7 @@ export interface MemoDraft {
   summary: string;
   kind: 'GENERAL' | 'INTEL_RELAY';
   intelClaim?: IntelClaim;
+  relayFrom?: SeatId;             // TDD-002 §9.1 CR-1：INTEL_RELAY 必填，须 ∈ parties
   witnesses?: SeatId[];
 }
 
@@ -174,6 +175,10 @@ export function registerMemoContract(state: Game, draft: MemoDraft): ContractRes
     const ic = draft.intelClaim;
     if (ic === undefined || ic.target === undefined || ic.field === undefined || ic.claimedValue === undefined) {
       return { ok: false, reason: 'INTEL_RELAY 需要完整的 intelClaim（target / field / claimedValue）' };
+    }
+    // TDD-002 §9.1 CR-1：情报提供方须明示，且必须是当事人之一
+    if (draft.relayFrom === undefined || !draft.parties.includes(draft.relayFrom)) {
+      return { ok: false, reason: 'INTEL_RELAY 需要 relayFrom，且必须是当事人之一' };
     }
   }
 
@@ -190,7 +195,10 @@ export function registerMemoContract(state: Game, draft: MemoDraft): ContractRes
     kind: draft.kind,
     accusations: [],
   };
-  if (draft.kind === 'INTEL_RELAY') contract.intelClaim = draft.intelClaim!;
+  if (draft.kind === 'INTEL_RELAY') {
+    contract.intelClaim = draft.intelClaim!;
+    contract.relayFrom = draft.relayFrom!;
+  }
   s.contracts.push(contract);
 
   const events: GameEvent[] = [];
@@ -201,6 +209,7 @@ export function registerMemoContract(state: Game, draft: MemoDraft): ContractRes
     contractId: contract.contractId, parties: contract.parties, kind: contract.kind,
     summary: contract.summary,
     ...(contract.intelClaim !== undefined ? { intelClaim: contract.intelClaim } : {}),
+    ...(contract.relayFrom !== undefined ? { relayFrom: contract.relayFrom } : {}),
   }, s.round, s.phase);
   return { ok: true, state: s, events, contractId: contract.contractId };
 }

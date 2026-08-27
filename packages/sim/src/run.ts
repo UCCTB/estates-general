@@ -1,10 +1,11 @@
-// 跑一整局（阶段 2）：initGame → (roundStart → 情报 → 谈判[契约/转账] → lockSubmissions → settle) × 6
-//                    → finalStanding + verifyIntelClaims。
+// 跑一整局（阶段 2 + 阶段 4）：initGame → (roundStart → 情报 → 谈判[契约/转账/承诺]
+//                    → lockSubmissions → settle) × 6 → verifyIntelClaims → finalize → 三层结局。
 // 输出完全确定（同 seed 逐字节相同）：不含时间戳，不用 Math.random。
 // 指标对应规则书 §26 中可数值化部分；契约/借贷/情报交易指标由阶段 2 谈判脚本产生。
 import type { Game, GameEvent, Identity, Qualification, SettleResults } from '@estates/engine';
 import {
-  beginNegotiation, finalStanding, initGame, lockSubmissions, roundStart, settle, verifyIntelClaims,
+  beginNegotiation, finalize, initGame, lockSubmissions, resolveEpilogue,
+  roundStart, settle, verifyIntelClaims,
 } from '@estates/engine';
 import { buildSubmissions } from './strategies.js';
 import { runIntelPhase, runNegotiation } from './negotiation.js';
@@ -17,6 +18,8 @@ const QUAL_ZH: Record<Qualification, string> = {
   NONE: '无', BASIC: '基础', ENGINEERING: '工程', ADMIN: '行政', ORG: '组织', CORE: '核心',
 };
 const AUDIT_ZH = { RECORD_FIRST: '履历优先', QUALIFICATION_FIRST: '资格优先', PRACTICE_FIRST: '实务优先' } as const;
+// 判定与规则书原文的关系（TDD-002 §5.1）
+const APPROX_ZH = { EXACT: '等价', NARROW: '收紧', FUZZY: '近似' } as const;
 
 function totalFunds(state: Game): number {
   // 含在途收益（中标奖金下一回合到账），保证守恒读数连贯
@@ -143,7 +146,9 @@ export function runGame(seed: string): string {
   // ── 终局 ──
   const verified = verifyIntelClaims(state);
   state = verified.state;
-  const standing = finalStanding(state);
+  const fin = finalize(state);
+  state = fin.state;
+  const standing = { rows: fin.rows, passCount: fin.passCount };
   lines.push('=== 终局 ===');
   lines.push(`过线人数 Q = ${standing.passCount}`);
   lines.push('身份\t座位\t资金\t印章(计入)\t记录\t资格\t失信\t过线\t名次');
@@ -157,6 +162,47 @@ export function runGame(seed: string): string {
   for (const e of verified.events) {
     const p = e.payload;
     lines.push(`[情报核验] ${p['contractId']} 声称 ${String(p['claimedValue'])}，真值 ${String(p['actualValue'])} → ${p['truthful'] === true ? '属实' : '谣言'}`);
+  }
+
+  // ── 三层结局与成就（TDD-002）──
+  const ep = resolveEpilogue(state, fin.ending, fin.autoAwards);
+  state = ep.state;
+  lines.push('=== 三层结局（TDD-002）===');
+  lines.push(`第一层 时代结局：${fin.ending.era.name}（Q = ${fin.passCount}）——${fin.ending.era.note}`);
+  const polityName = fin.ending.polity.name === '' ? '（无）' : fin.ending.polity.name;
+  const polityTag = fin.ending.polityFallback ? '，规则书 §20 未列此组合，走通则回退' : '';
+  lines.push(`第二层 政体结局：${polityName}（${fin.ending.polity.kind}${polityTag}）`);
+  lines.push(`最终标题：${ep.ending.title}`);
+  if (ep.ending.epilogue.length === 0) {
+    lines.push('第三层 社会史后记：（本局没有可作后记的成就）');
+  } else {
+    for (const item of ep.ending.epilogue) {
+      lines.push(`第三层 后记：${item.text}（【${item.name}】/ ${item.source}）`);
+    }
+  }
+
+  lines.push('=== 自动档成就 ===');
+  if (fin.autoAwards.length === 0) {
+    lines.push('（本局未解锁任何自动档成就）');
+  } else {
+    for (const a of fin.autoAwards) {
+      const who = a.subjects.length === 0 ? '（无特定归属）'
+        : a.subjects.map((k) => IDENTITY_ZH[state.seats[k as 1].identity]).join('、');
+      lines.push(`【${a.name}】${who}｜${a.evidence.note}｜判定 ${APPROX_ZH[a.evidence.approx]}`);
+    }
+  }
+
+  lines.push('=== 提名档候选（需终局全员投票确认）===');
+  if (fin.nominations.length === 0) {
+    lines.push('（本局没有捞出任何候选）');
+  } else {
+    for (const n of fin.nominations) {
+      lines.push(`【${n.name}】${n.candidates.length} 个候选`);
+      for (const c of n.candidates.slice(0, 3)) {
+        lines.push(`    座位 ${c.subjects.join('、')}：${c.rationale}`);
+      }
+      if (n.candidates.length > 3) lines.push(`    …另有 ${n.candidates.length - 3} 个候选`);
+    }
   }
 
   // ── 观察指标（规则书 §26 可数值化部分）──

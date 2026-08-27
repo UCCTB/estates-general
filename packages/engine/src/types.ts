@@ -37,6 +37,17 @@ export interface Game {
   // 情报揭示历史（TDD-001 §4.5；§4.1 未声明存放位置，同 issues #1 处理）：
   // 用于「同一项目不重复揭示已获知字段」（规则书 §5.3）与终局复盘
   intelReveals: IntelReveal[];
+  // TDD-002 §9.2 CR-2：公共危机的公开承诺。不产生任何资源后果，只被记录。
+  // 【公地悲剧】【共同体】两条自动档成就的唯一可观测依据。
+  crisisPledges: CrisisPledge[];
+}
+
+// TDD-002 §9.2 CR-2。每 (seatId, round) 至多一条，后登记覆盖前一条。
+export interface CrisisPledge {
+  seatId: SeatId;
+  round: Round;
+  funds: number;
+  ability: number;
 }
 
 export interface Seat {
@@ -161,6 +172,9 @@ export interface MemoContract extends ContractBase {
   summary: string;                // 自由文本，≤ 140 字，对系统无语义
   kind: 'GENERAL' | 'INTEL_RELAY';
   intelClaim?: IntelClaim;        // kind = INTEL_RELAY 时必填，TDD-001 §5.8
+  // TDD-002 §9.1 CR-1：情报提供方。parties 是无向的，缺了它就分不出谁在卖情报，
+  // 【信息垄断】【谣言制造者】【知识就是力量】三条自动档成就都无法判定。
+  relayFrom?: SeatId;             // kind = INTEL_RELAY 时必填，须 ∈ parties
   accusations: Accusation[];
 }
 
@@ -241,7 +255,9 @@ export type EventType =
   | 'PROJECT_RESOLVED' | 'CRISIS_RESOLVED' | 'PAYOUT' | 'PENALTY'
   | 'RECORD_GRANTED' | 'STAMP_GRANTED' | 'QUALIFICATION_QUEUED' | 'QUALIFICATION_APPLIED'
   | 'SEAT_CONNECTED' | 'SEAT_DISCONNECTED' | 'SEAT_TOKEN_REISSUED'
-  | 'ACHIEVEMENT_AUTO' | 'ACHIEVEMENT_NOMINATED' | 'GAME_END';
+  | 'ACHIEVEMENT_AUTO' | 'ACHIEVEMENT_NOMINATED' | 'GAME_END'
+  // TDD-002 新增：§9.2 CR-2 的承诺事件，与 §3 / §7.3 的终局流程事件
+  | 'CRISIS_PLEDGED' | 'BALLOT_OPENED' | 'GAME_ENDING_RESOLVED';
 
 export type Visibility = 'PUBLIC' | 'PARTIES' | 'SEAT' | 'HOST';
 

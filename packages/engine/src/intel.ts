@@ -94,8 +94,11 @@ export function verifyIntelClaims(state: Game): { state: Game; events: GameEvent
     const card = s.decks[claim.target.domain][claim.target.round - 1]!;
     const actual = fieldValue(card, s.auditOrders, claim.target.round, claim.field);
     const truthful = actual !== undefined && String(actual) === String(claim.claimedValue);
+    // relayFrom（TDD-002 §9.1）在此处随核验结果一并公开：局中它属条款级私密，
+    // 终局揭示真伪时「是谁说的」才有意义。
     emitEvent(s, events, 'INTEL_CLAIM_VERIFIED', 'PUBLIC', {
       contractId: c.contractId, parties: c.parties,
+      relayFrom: c.relayFrom ?? null,
       target: claim.target, field: claim.field,
       claimedValue: claim.claimedValue, actualValue: actual ?? null, truthful,
     }, 6, 'GAME_END');

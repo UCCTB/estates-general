@@ -108,6 +108,7 @@ describe('verifyIntelClaims（§5.8：局中不揭示，终局批量比对）', 
     const honest = registerMemoContract(s, {
       parties: [scholar, merchant], summary: '下回合商业最低出资', kind: 'INTEL_RELAY',
       intelClaim: { target: { round: 2, domain: 'COMMERCE' }, field: 'minFunds', claimedValue: honestValue },
+      relayFrom: scholar,
     });
     expect(honest.ok).toBe(true);
     if (!honest.ok) return;
@@ -115,6 +116,7 @@ describe('verifyIntelClaims（§5.8：局中不揭示，终局批量比对）', 
     const lie = registerMemoContract(s, {
       parties: [bishop, queen], summary: '下回合战争要 999 资金', kind: 'INTEL_RELAY',
       intelClaim: { target: { round: 2, domain: 'WAR' }, field: 'minFunds', claimedValue: 999 },
+      relayFrom: bishop,
     });
     expect(lie.ok).toBe(true);
     if (!lie.ok) return;

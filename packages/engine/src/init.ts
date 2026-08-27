@@ -74,6 +74,7 @@ export function initGame(gameId: string, seed: string): { state: Game; events: G
     pendingQualifications: [],
     pendingPayouts: [],
     intelReveals: [],
+    crisisPledges: [],
   };
 
   // 洗牌抽取记入事件日志（TDD-001 §6.5：记录每次 rng 调用）。

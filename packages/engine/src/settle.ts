@@ -9,6 +9,10 @@ import { drawInt, drawU32 } from './rng.js';
 import { entrySatisfiedByOne, entrySatisfiedByTeam } from './qualification.js';
 import { flushPendingPayouts } from './payouts.js';
 import { step8Execute, type SettleFacts } from './contracts.js';
+import { entryToString } from './intel.js';
+import { emitRoundFacts, type FactsTeam, type ProjectDomain, type TeamDomain } from './roundFacts.js';
+import { evaluateRoundAchievements } from './achievements.js';
+import { pledgeTotals } from './pledge.js';
 import { WAR_BONUS_CAP, WAR_QUALIFICATION_BONUS } from './data/war-bonus.js';
 
 // ── 内部结构 ─────────────────────────────────────────────────────────
@@ -33,6 +37,7 @@ export interface Team {
   members: SeatId[];              // 升序
   contributions: TeamContribution[];
   formed: boolean;                // 成队：members 集合一致且全员各恰有一条同 teamId entry
+  legal: boolean;                 // 通过本领域全部过滤条件（步骤 1–3 回填，供 TDD-002 查询）
   bid: number | null;             // ENGINEERING：全员一致才有值（issues #5）
   payee: SeatId | null;           // 全员一致指定的收款人（2026-08-27 裁定，不一致 → 作废）
   totalFunds: number;
@@ -47,7 +52,7 @@ export interface CommerceResult {
   result: 'SUCCESS' | 'FAIL' | 'NO_AWARD'; payout: number;
   effectiveRisk: number | null; dice: number | null;
 }
-export interface AdminApplicant { seatId: SeatId; ability: number; qualificationUsed?: Qualification; }
+export interface AdminApplicant { seatId: SeatId; ability: number; qualificationUsed?: Qualification; eligible: boolean; }
 export interface AdminResult {
   card: ProjectCard; auditOrder: AuditOrder;
   applicants: AdminApplicant[]; selected: SeatId[];
@@ -125,6 +130,7 @@ function collectTeams(ctx: Ctx, domain: 'ENGINEERING' | 'WAR' | 'COMMERCE'): Tea
       members: memberSet,
       contributions,
       formed,
+      legal: false,
       bid,
       payee: samePayee ? list[0]!.payee : null,
       totalFunds: contributions.reduce((a, c) => a + c.funds, 0),
@@ -165,6 +171,7 @@ export function step1Engineering(ctx: Ctx): EngineeringResult {
     && t.totalAbility >= card.minAbility!
     && t.bid !== null && t.bid >= minBid && t.bid <= card.budgetCap!,
   );
+  for (const t of legal) t.legal = true;
   const keys = drawTiebreakKeys(ctx, 'ENGINEERING', 'ENG', legal.length);
   const ranked = legal
     .map((t, i) => ({ t, key: keys[i]! }))
@@ -195,6 +202,7 @@ export function step2War(ctx: Ctx): WarResult {
     && t.totalFunds >= card.minFunds!
     && t.totalAbility >= card.minAbility!,
   );
+  for (const t of legal) t.legal = true;
   const bonus = (t: Team) => Math.min(
     WAR_BONUS_CAP,
     t.usedQuals.reduce((a, q) => a + (WAR_QUALIFICATION_BONUS[q] ?? 0), 0),
@@ -224,6 +232,7 @@ export function step3Commerce(ctx: Ctx): CommerceResult {
   const legal = teams.filter((t) =>
     t.formed && t.totalFunds >= card.minFunds! && t.totalAbility >= card.minAbility!,
   );
+  for (const t of legal) t.legal = true;
   const keys = drawTiebreakKeys(ctx, 'COMMERCE', 'COM', legal.length);
   const ranked = legal
     .map((t, i) => ({ t, key: keys[i]! }))
@@ -260,7 +269,7 @@ export function step4Admin(ctx: Ctx): AdminResult {
   for (const sub of ctx.subs.values()) {
     for (const e of sub.entries) {
       if (e.domain !== 'ADMIN') continue;
-      const a: AdminApplicant = { seatId: sub.seatId, ability: e.ability };
+      const a: AdminApplicant = { seatId: sub.seatId, ability: e.ability, eligible: false };
       if (e.qualificationUsed !== undefined) a.qualificationUsed = e.qualificationUsed;
       applicants.push(a);
     }
@@ -270,6 +279,7 @@ export function step4Admin(ctx: Ctx): AdminResult {
   const eligible = applicants.filter((a) =>
     entrySatisfiedByOne(card.entry, a.qualificationUsed) && a.ability >= card.minAbility!,
   );
+  for (const a of eligible) a.eligible = true;
 
   const seatOf = (id: SeatId) => ctx.s.seats[id];
   const adminRecords = (id: SeatId) => seatOf(id).records.filter((r) => r.domain === 'ADMIN').length;
@@ -531,10 +541,103 @@ export function step10QueueQualifications(ctx: Ctx): void {
   }
 }
 
-// 步骤 11：收尾。成就查询（自动档）为阶段 4 内容，留空；公开日志即本次事件列表；
+// 把本回合的结算事实落成一条 HOST 事件（roundFacts.ts 说明了为什么需要它）。
+// 全部字段都是结算已完成后的事实，不含任何仍需保密的信息。
+function writeRoundFacts(ctx: Ctx, r: SettleResults): void {
+  const toFactsTeam = (t: Team): FactsTeam => ({
+    teamId: t.teamId,
+    members: [...t.members],
+    formed: t.formed,
+    legal: t.legal,
+    payee: t.payee,
+    bid: t.bid,
+    contributions: t.contributions.map((c) => ({
+      seatId: c.seatId, funds: c.funds, ability: c.ability,
+      ...(c.qualificationUsed !== undefined ? { qualificationUsed: c.qualificationUsed } : {}),
+    })),
+  });
+
+  const seatIds = Object.keys(ctx.s.seats).map(Number) as SeatId[];
+  const abilityCommitted: Record<string, number> = {};
+  const gains: Record<string, number> = {};
+  for (const id of seatIds) {
+    abilityCommitted[String(id)] = ctx.s.seats[id].abilityCommitted;
+    gains[String(id)] = 0;
+  }
+  const addGain = (id: SeatId, n: number) => { gains[String(id)] = (gains[String(id)] ?? 0) + n; };
+
+  // 中标收益按 payee 计（在途，下一回合到账，但归属本回合）
+  if (r.engineering.winner?.payee != null) addGain(r.engineering.winner.payee, r.engineering.payout);
+  if (r.war.winner?.payee != null) addGain(r.war.winner.payee, r.war.payout);
+  if (r.commerce.winner?.payee != null && r.commerce.result === 'SUCCESS') {
+    addGain(r.commerce.winner.payee, r.commerce.payout);
+  }
+  // 落选返还与行政报酬当回合入账
+  for (const t of r.war.teams) {
+    if (t === r.war.winner) continue;
+    for (const c of t.contributions) addGain(c.seatId, Math.floor(c.funds * 0.8));
+  }
+  for (const t of r.commerce.teams) {
+    if (t === r.commerce.winner) continue;
+    for (const c of t.contributions) addGain(c.seatId, c.funds);
+  }
+  for (const id of r.admin.selected) addGain(id, r.admin.payoutEach);
+
+  const teams: Record<TeamDomain, FactsTeam[]> = {
+    ENGINEERING: r.engineering.teams.map(toFactsTeam),
+    WAR: r.war.teams.map(toFactsTeam),
+    COMMERCE: r.commerce.teams.map(toFactsTeam),
+  };
+  const projectResult: Record<ProjectDomain, 'SUCCESS' | 'FAIL' | 'NO_AWARD'> = {
+    ENGINEERING: r.engineering.winner ? 'SUCCESS' : 'NO_AWARD',
+    WAR: r.war.winner ? 'SUCCESS' : 'NO_AWARD',
+    COMMERCE: r.commerce.result,
+    ADMIN: r.admin.selected.length > 0 ? 'SUCCESS' : 'NO_AWARD',
+  };
+  const entryLabel: Record<ProjectDomain, string> = {
+    ENGINEERING: entryToString(r.engineering.card.entry),
+    WAR: entryToString(r.war.card.entry),
+    COMMERCE: entryToString(r.commerce.card.entry),
+    ADMIN: entryToString(r.admin.card.entry),
+  };
+  const pledges = pledgeTotals(ctx.s, ctx.round);
+
+  emitRoundFacts(ctx.s, ctx.out, {
+    round: ctx.round,
+    teams,
+    winnerTeamId: {
+      ENGINEERING: r.engineering.winner?.teamId ?? null,
+      WAR: r.war.winner?.teamId ?? null,
+      COMMERCE: r.commerce.winner?.teamId ?? null,
+    },
+    winnerMembers: {
+      ENGINEERING: r.engineering.winner?.members ?? [],
+      WAR: r.war.winner?.members ?? [],
+      COMMERCE: r.commerce.result === 'SUCCESS' ? (r.commerce.winner?.members ?? []) : (r.commerce.winner?.members ?? []),
+    },
+    projectResult,
+    entryLabel,
+    admin: { applicants: r.admin.applicants.map((a) => ({ ...a })), selected: [...r.admin.selected] },
+    crisis: {
+      result: r.crisis.result,
+      contributions: Object.fromEntries(
+        Object.entries(r.crisis.contributions).map(([k, v]) => [k, { funds: v!.funds, ability: v!.ability }])),
+      fundsTarget: r.crisis.card.fundsTarget!,
+      abilityTarget: r.crisis.card.abilityTarget!,
+    },
+    abilityCommitted,
+    gains,
+    pledges: { count: pledges.count, funds: pledges.funds, ability: pledges.ability },
+  });
+}
+
+// 步骤 11：收尾。写入本回合结算事实（HOST 审计记录，roundFacts.ts）、跑自动档成就查询
+// （TDD-001 §8.3 / TDD-002 §5）；公开日志即本次事件列表；
 // 解冻转账由 Game Server 在进入下一回合 REVEAL_AND_INTEL 时执行（引擎无 I/O）。
-export function step11Wrapup(ctx: Ctx): void {
-  // 阶段 4：成就自动档查询（TDD-001 §8.3）
+export function step11Wrapup(ctx: Ctx, r: SettleResults): void {
+  writeRoundFacts(ctx, r);
+  evaluateRoundAchievements(ctx.s, ctx.out, ctx.round);
+
   if (ctx.round === 6) {
     // 第 6 回合没有下一回合：在途收益终局前即时到账（issues #12），保证过线判定含此资金
     flushPendingPayouts(ctx.s, ctx.out, ctx.round, 'SETTLEMENT');
@@ -618,7 +721,7 @@ export function settle(
   // 记录段（9–11）
   step9Records(ctx, results);
   step10QueueQualifications(ctx);
-  step11Wrapup(ctx);
+  step11Wrapup(ctx, results);
 
   return { state: s, events: out, results };
 }
