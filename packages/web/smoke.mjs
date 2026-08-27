@@ -6,6 +6,7 @@
 // 所以这里用 node:vm 造一个够用的 window：真出了运行时错误，这里会炸。
 //
 // 用法：pnpm --filter @estates/web build && pnpm --filter @estates/web smoke
+//       node smoke.mjs https://estates-general.vercel.app/sandbox.js   ← 冲线上那份跑
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 import { dirname, join } from 'node:path';
@@ -13,6 +14,16 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ORIGIN = 'https://example.test';
+
+// 默认测本地构建产物；给个 URL 就测线上那份——部署完拿它验一遍最踏实
+const TARGET = process.argv[2] ?? join(HERE, 'dist', 'sandbox.js');
+
+async function loadBundle() {
+  if (!/^https?:\/\//.test(TARGET)) return readFile(TARGET, 'utf8');
+  const r = await fetch(TARGET);
+  if (!r.ok) throw new Error(`拉不到 ${TARGET}：HTTP ${r.status}`);
+  return r.text();
+}
 
 let failures = 0;
 function check(label, cond, extra = '') {
@@ -60,7 +71,8 @@ function makeContext() {
 
 const ctx = makeContext();
 const originalFetch = ctx.fetch;   // 上面那个「不该被调用」的桩，用来确认确实被换掉了
-const bundle = await readFile(join(HERE, 'dist', 'sandbox.js'), 'utf8');
+const bundle = await loadBundle();
+console.log(`目标：${TARGET}（${bundle.length} 字）\n`);
 runInContext(bundle, ctx, { filename: 'sandbox.js' });
 
 check('bundle 跑完没抛异常，留下了 __ESTATES_SANDBOX__ 标记', ctx.__ESTATES_SANDBOX__ === true);

@@ -71,6 +71,9 @@ pnpm serve         # 默认 http://localhost:8787
 ```bash
 pnpm build                          # → packages/web/dist（纯静态）
 pnpm --filter @estates/web smoke     # 把构建产物丢进假 window 跑一遍
+
+# 部署完验线上那一份（node:vm 造个假 window，跑真的 sandbox.js）
+node packages/web/smoke.mjs https://estates-general.vercel.app/sandbox.js
 ```
 
 跟真服务端的三条差别：链接只在**签发它的那台浏览器**里有效（密钥和存档都在本机
