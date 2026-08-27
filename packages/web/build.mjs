@@ -18,6 +18,8 @@ const PUBLIC = join(ROOT, 'packages', 'server', 'public');
 const DIST = join(HERE, 'dist');
 
 const REPO = 'https://github.com/UCCTB/estates-general';
+const SITE = 'https://estates-general.vercel.app';
+const BLURB = '《三级会议》裁判引擎——12 人 / 6 回合社会博弈游戏的数字裁判。公开评审。';
 
 // ── 站点导航 ───────────────────────────────────────────────────────────
 
@@ -43,7 +45,13 @@ function shell({ title, current, wide = false, body, script = '' }) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
-<meta name="description" content="《三级会议》裁判引擎——12 人 / 6 回合社会博弈游戏的数字裁判。公开评审。">
+<meta name="description" content="${BLURB}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="《三级会议》裁判引擎">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${BLURB}">
+<meta property="og:url" content="${SITE}">
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9A%96%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="/site.css">
 </head>

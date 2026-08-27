@@ -7,15 +7,27 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/join/:token", "destination": "/player.html" },
-    { "source": "/host/:token", "destination": "/host.html" }
+    {
+      "source": "/join/:token",
+      "destination": "/player"
+    },
+    {
+      "source": "/host/:token",
+      "destination": "/host"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
       ]
     }
   ]

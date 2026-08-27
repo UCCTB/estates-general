@@ -1,7 +1,7 @@
 {
   "name": "estates-general",
   "private": true,
-  "packageManager": "pnpm@9",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=20"
   },
@@ -11,5 +11,10 @@
     "sim": "pnpm --filter @estates/sim start --",
     "serve": "pnpm --filter @estates/server start",
     "build": "pnpm --filter @estates/web build"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
